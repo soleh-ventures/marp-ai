@@ -1,0 +1,27 @@
+{
+  "name": "marp-ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --hot src/server.ts",
+    "start": "bun run src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "bun run src/db/migrate.ts",
+    "db:studio": "drizzle-kit studio"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "dotenv": "^16.4.7",
+    "drizzle-orm": "^0.36.4",
+    "hono": "^4.6.14",
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "@types/node": "^22.10.2",
+    "drizzle-kit": "^0.30.1",
+    "typescript": "^5.7.2"
+  }
+}
