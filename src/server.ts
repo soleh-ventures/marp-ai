@@ -2,10 +2,13 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { config } from "./config.js";
 import { ping } from "./db/client.js";
+import { twilioWebhook } from "./webhooks/twilio.js";
 
 export const app = new Hono();
 
 app.get("/", (c) => c.text("marp-ai"));
+
+app.route("/webhooks/twilio", twilioWebhook);
 
 app.get("/health", async (c) => {
   const dbOk = await ping();
