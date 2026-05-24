@@ -19,6 +19,12 @@ const twilioAuthToken = isProd
   ? required("TWILIO_AUTH_TOKEN")
   : (process.env.TWILIO_AUTH_TOKEN ?? "");
 
+// LLM provider: "anthropic" (live) or "mock" (no API calls — for tests + offline dev).
+// In tests we hard-set this to "mock" so the suite never spends tokens.
+const llmProvider = (process.env.LLM_PROVIDER ?? "anthropic") as
+  | "anthropic"
+  | "mock";
+
 export const config = {
   port: Number(process.env.PORT ?? 3000),
   nodeEnv,
@@ -30,5 +36,14 @@ export const config = {
     publicWebhookBase: process.env.TWILIO_PUBLIC_WEBHOOK_BASE ?? "",
     // Dev escape hatch — never set in prod.
     skipSignature: process.env.SKIP_TWILIO_SIGNATURE === "1" && !isProd,
+  },
+  llm: {
+    provider: llmProvider,
+    anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
+    // Default model per router component. Override via env if a domain
+    // wants a stronger model.
+    classifierModel: process.env.LLM_CLASSIFIER_MODEL ?? "claude-haiku-4-5",
+    domainModel: process.env.LLM_DOMAIN_MODEL ?? "claude-sonnet-4-6",
+    synthesizerModel: process.env.LLM_SYNTHESIZER_MODEL ?? "claude-sonnet-4-6",
   },
 };
