@@ -2,7 +2,12 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { config } from "./config.js";
 import { ping } from "./db/client.js";
+import { validateAllPrompts } from "./router/prompts.js";
 import { twilioWebhook } from "./webhooks/twilio.js";
+
+// Fail loud at boot if any prompt file is missing or unparseable. Better
+// than discovering it when the first runner texts MARP.
+validateAllPrompts();
 
 export const app = new Hono();
 

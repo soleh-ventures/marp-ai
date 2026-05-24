@@ -1,26 +1,15 @@
 import { config } from "../config.js";
 import { llmCall } from "../services/llm-call.js";
-import { DOMAINS, isDomain, type Routing } from "./types.js";
+import { getClassifierPrompt } from "./prompts.js";
+import { isDomain, type Routing } from "./types.js";
 
 // JSON-mode classifier. We could use tool_use, but with Claude 4.x the
 // strict JSON schema in the system prompt + a parse fallback is reliable
 // at this prompt size, ~10x cheaper to debug, and keeps the LlmProvider
 // interface lean (no tool_use abstraction needed at the provider layer).
-const SYSTEM = `You are MARP's routing classifier. The runner's message will be
-handled by one or more domain experts: training, nutrition, injury, mental,
-recovery, gear.
-
-Pick the MINIMUM set of domains needed. Most messages need exactly one. Only
-return multiple domains when the message genuinely spans them — e.g. "my
-shin hurts and I'm freaking out about the race" is injury + mental, but
-"how do I taper?" is training only.
-
-Respond with STRICT JSON on a single line, no prose, no markdown fences:
-{"domains":["training"],"confidence":0.92,"rationale":"asks about taper week structure"}
-
-Allowed domains: ${DOMAINS.join(", ")}.
-Confidence is your own 0..1 estimate. Rationale is one short sentence.`;
-
+//
+// System prompt lives in prompts/classifier.md so we can iterate on it
+// without redeploying code.
 export async function classify(
   message: string,
   ctx: { athleteId?: string; messageId?: string },
@@ -28,7 +17,7 @@ export async function classify(
   const res = await llmCall(
     {
       model: config.llm.classifierModel,
-      system: SYSTEM,
+      system: getClassifierPrompt(),
       user: message,
       maxTokens: 200,
       temperature: 0,
