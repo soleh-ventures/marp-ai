@@ -4,9 +4,20 @@ import { db } from "../db/client.js";
 import { messages } from "../db/schema.js";
 import { findOrCreateByPhone } from "../services/athletes.js";
 import { claimMessage } from "../services/idempotency.js";
+import { processIncomingMessage } from "../services/process-incoming.js";
 import { verifySignature } from "../services/twilio-signature.js";
 
 export const twilioWebhook = new Hono();
+
+// Tracks fire-and-forget background processing so tests can await all
+// in-flight work before tearing down (prevents FK races against
+// per-test TRUNCATE). In prod, entries are removed as soon as the
+// promise settles — it's effectively a debug handle.
+const inFlight: Set<Promise<unknown>> = new Set();
+
+export function pendingBackgroundWork(): Promise<unknown> {
+  return Promise.allSettled([...inFlight]);
+}
 
 // Empty TwiML response — tells Twilio we've accepted the message but won't
 // send a synchronous reply. The expert-router will reply async via the
@@ -66,13 +77,33 @@ twilioWebhook.post("/whatsapp", async (c) => {
   const numMedia = Number(params.NumMedia ?? "0");
   const mediaUrl = numMedia > 0 ? (params.MediaUrl0 ?? null) : null;
 
-  await db.insert(messages).values({
-    athleteId: athlete.id,
-    direction: "in",
-    body: bodyText,
-    mediaUrl,
-    twilioMessageSid: sid,
-  });
+  const [inserted] = await db
+    .insert(messages)
+    .values({
+      athleteId: athlete.id,
+      direction: "in",
+      body: bodyText,
+      mediaUrl,
+      twilioMessageSid: sid,
+    })
+    .returning({ id: messages.id });
+  if (!inserted) {
+    return c.text("internal", 500);
+  }
+
+  // Fire and forget: ack to Twilio immediately, run the brain + reply
+  // in the background. Twilio's webhook timeout is 15s but multi-domain
+  // routing can be ~25s — synchronous reply isn't an option. Errors are
+  // logged; the runner just doesn't see a reply, which is recoverable
+  // (they'll re-engage, we'll see it in the log).
+  const task = processIncomingMessage(athlete.id, inserted.id, bodyText)
+    .catch((err) => {
+      console.error("processIncoming failed:", err);
+    })
+    .finally(() => {
+      inFlight.delete(task);
+    });
+  inFlight.add(task);
 
   return c.body(EMPTY_TWIML, 200, { "Content-Type": "text/xml" });
 });

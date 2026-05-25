@@ -1,10 +1,12 @@
-import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { sql } from "drizzle-orm";
 import { app } from "../server.js";
 import { config } from "../config.js";
 import { db } from "../db/client.js";
 import { athletes, messages, processedMessages } from "../db/schema.js";
+import { _resetProviderCache, mockProvider } from "../services/llm/index.js";
 import { computeSignature } from "../services/twilio-signature.js";
+import { pendingBackgroundWork } from "./twilio.js";
 
 const TEST_AUTH_TOKEN = "test_auth_token_DO_NOT_USE_IN_PROD";
 const WEBHOOK_URL = "https://marp.test/webhooks/twilio/whatsapp";
@@ -16,6 +18,14 @@ beforeAll(() => {
   (config.twilio as { publicWebhookBase: string }).publicWebhookBase =
     "https://marp.test";
   (config.twilio as { skipSignature: boolean }).skipSignature = false;
+  // Force the LLM into mock mode so the webhook's background
+  // processIncoming doesn't try to call Anthropic.
+  (config.llm as { provider: "mock" | "anthropic" }).provider = "mock";
+  _resetProviderCache();
+  // Blank account SID short-circuits sendWhatsApp before any HTTP call —
+  // tests don't need real outbound delivery and we don't want to hammer
+  // Twilio with bad creds (slow + 401 noise in test output).
+  (config.twilio as { accountSid: string }).accountSid = "";
 });
 
 beforeEach(async () => {
@@ -25,6 +35,26 @@ beforeEach(async () => {
       activities, race_blocks, athletes
     RESTART IDENTITY CASCADE
   `);
+  // Catch-all canned responses so the background processIncoming runs
+  // cleanly. These tests don't assert on the reply content — they
+  // assert on the webhook ingress contract — so any valid response
+  // shape is fine. Ordered most-specific-first.
+  mockProvider.reset();
+  mockProvider.setResponses([
+    { match: "# Expert answers", text: "synthesized-stub-reply" },
+    { match: "# Message", text: "domain-stub-reply" },
+    {
+      match: /.*/,
+      text: '{"domains":["training"],"confidence":0.5,"rationale":"stub"}',
+    },
+  ]);
+});
+
+afterEach(async () => {
+  // Drain any fire-and-forget processIncoming work the webhook kicked
+  // off — otherwise the next beforeEach TRUNCATE races the background
+  // insert into llm_calls and we get FK violations.
+  await pendingBackgroundWork();
 });
 
 function makeSignedRequest(params: Record<string, string>): Request {

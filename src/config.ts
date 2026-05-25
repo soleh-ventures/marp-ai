@@ -32,6 +32,11 @@ export const config = {
   databaseUrl: required("DATABASE_URL"),
   twilio: {
     authToken: twilioAuthToken,
+    // Account SID + sandbox sender. Required for outbound replies. The
+    // SID itself isn't secret (it's effectively a username) but we read
+    // it from env to keep deploy config in one place.
+    accountSid: process.env.TWILIO_ACCOUNT_SID ?? "",
+    whatsappFrom: process.env.TWILIO_WHATSAPP_FROM ?? "whatsapp:+14155238886",
     // When set, overrides reconstructed URL (useful behind proxies/ngrok).
     publicWebhookBase: process.env.TWILIO_PUBLIC_WEBHOOK_BASE ?? "",
     // Dev escape hatch — never set in prod.
