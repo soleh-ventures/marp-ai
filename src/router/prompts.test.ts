@@ -81,4 +81,20 @@ describe("prompt files on disk", () => {
     expect(f.body).toMatch(/yellow|🟡/i);
     expect(f.body).toMatch(/red|🔴/i);
   });
+
+  test("every domain prompt has a 'Cite the principle' section (ET18 / CEO S1)", () => {
+    // E14 content-licensing guard: each domain MUST instruct the LLM to
+    // cite the underlying principle when making strong recommendations.
+    // The presence of this section is the contract; T12 evals will
+    // measure whether the LLM actually obeys it.
+    for (const d of DOMAINS) {
+      const f = getDomainPromptFile(d);
+      expect(f.body).toMatch(/# Cite the principle/);
+      // Sanity: each section must also explicitly forbid verbatim quotes
+      // (the E14 boundary). One way to check: the words "page numbers"
+      // and "verbatim" both appear under the section.
+      expect(f.body).toMatch(/page numbers/);
+      expect(f.body).toMatch(/verbatim/);
+    }
+  });
 });
