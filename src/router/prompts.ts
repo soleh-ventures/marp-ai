@@ -134,6 +134,10 @@ export function getSynthesizerPrompt(): string {
   return loadFile("synthesizer.md").body;
 }
 
+export function getOnboardingPrompt(): string {
+  return loadFile("onboarding.md").body;
+}
+
 export function getDomainPromptFile(domain: Domain): PromptFile {
   return loadFile(`domains/${domain}.md`);
 }
@@ -144,6 +148,7 @@ export function getDomainPromptFile(domain: Domain): PromptFile {
 export function validateAllPrompts(): void {
   loadFile("classifier.md");
   loadFile("synthesizer.md");
+  loadFile("onboarding.md");
   for (const d of DOMAINS) {
     loadFile(`domains/${d}.md`);
   }

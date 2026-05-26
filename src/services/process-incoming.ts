@@ -1,26 +1,36 @@
 import { eq } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { athletes, messages } from "../db/schema.js";
+import {
+  getAthleticHistory,
+  isOnboarded,
+  runOnboardingTurn,
+} from "../flows/onboarding.js";
 import { getMemoryContext } from "../memory/retrieve.js";
 import { route } from "../router/index.js";
 import { sendWhatsApp, TwilioSendError } from "./twilio-send.js";
 
-// Fired from the webhook AFTER we've returned 200 to Twilio. Pulls
-// memory → routes through the brain → sends the reply → persists the
-// outbound message row. Runs detached; errors here don't crash the
-// request (the runner just doesn't get a reply, which they'd notice).
+// Fired from the webhook AFTER we've returned 200 to Twilio. Branches:
+//   - Athlete not onboarded → onboarding flow (one LLM call, extracts +
+//     updates athletic_history, returns the next question or the
+//     wrap-up message)
+//   - Athlete onboarded → memory retrieval + expert router
+// Then sends the reply via Twilio and persists the outbound row.
+// Runs detached; errors here don't crash the request.
 
 export async function processIncomingMessage(
   athleteId: string,
   messageId: string,
   body: string,
 ): Promise<void> {
-  // Pull the runner's phone — needed to address the outbound message.
-  // Could thread it through from the webhook to save the lookup, but
-  // doing it here keeps the contract tight: ids in, side effects done.
+  // Pull phone + athletic_history in one query — we need both regardless
+  // of which branch we take.
   const athleteRow = (
     await db
-      .select({ phone: athletes.phone })
+      .select({
+        phone: athletes.phone,
+        athleticHistory: athletes.athleticHistory,
+      })
       .from(athletes)
       .where(eq(athletes.id, athleteId))
       .limit(1)
@@ -30,17 +40,30 @@ export async function processIncomingMessage(
     return;
   }
 
-  // Memory + routing. The router persists every LLM call into llm_calls
-  // so we don't need to do anything extra for cost tracking.
-  const memory = await getMemoryContext(athleteId);
-  const result = await route({
-    message: body,
-    athleteId,
-    messageId,
-    contextSummary: memory.text,
-  });
+  const history = getAthleticHistory(athleteRow.athleticHistory);
 
-  const replyText = result.finalText.trim();
+  let replyText: string;
+  if (!isOnboarded(history)) {
+    // Onboarding branch. The flow persists the updated athletic_history
+    // itself; we just take the reply.
+    const onboardingResult = await runOnboardingTurn(
+      athleteId,
+      messageId,
+      body,
+    );
+    replyText = onboardingResult.reply;
+  } else {
+    // Normal expert routing branch.
+    const memory = await getMemoryContext(athleteId);
+    const result = await route({
+      message: body,
+      athleteId,
+      messageId,
+      contextSummary: memory.text,
+    });
+    replyText = result.finalText.trim();
+  }
+
   if (!replyText) {
     console.error(`processIncoming: empty reply for message ${messageId}`);
     return;
