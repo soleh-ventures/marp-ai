@@ -1,0 +1,2 @@
+ALTER TABLE "activities" ADD COLUMN "source_id" text;--> statement-breakpoint
+CREATE UNIQUE INDEX "activities_source_source_id_idx" ON "activities" USING btree ("source","source_id") WHERE "activities"."source_id" IS NOT NULL;

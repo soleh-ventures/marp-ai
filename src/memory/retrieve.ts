@@ -1,12 +1,23 @@
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { activeFlags, athletes, messages, raceBlocks } from "../db/schema.js";
+import {
+  activeFlags,
+  activities,
+  athletes,
+  messages,
+  raceBlocks,
+} from "../db/schema.js";
 
 // How many recent inbound + outbound messages to surface to the LLM as
 // dialog context. 20 is roughly the last week of chat at typical cadence
 // — small enough not to balloon prompt cost, long enough to catch
 // "wait, you told me yesterday…" callbacks.
 const RECENT_MESSAGE_LIMIT = 20;
+
+// How many recent activities (any source — Strava, FIT, GPX) to surface.
+// 14 covers roughly the last 1–2 weeks of consistent training; runners
+// who train less frequently get a longer time window naturally.
+const RECENT_ACTIVITY_LIMIT = 14;
 
 export type MemoryContext = {
   // The formatted string the router feeds to the domain LLMs.
@@ -16,6 +27,7 @@ export type MemoryContext = {
   athleteName: string | null;
   activeFlagCount: number;
   recentMessageCount: number;
+  recentActivityCount: number;
 };
 
 /**
@@ -42,7 +54,13 @@ export async function getMemoryContext(
     .limit(1);
   const athlete = athleteRows[0];
   if (!athlete) {
-    return { text: "", athleteName: null, activeFlagCount: 0, recentMessageCount: 0 };
+    return {
+      text: "",
+      athleteName: null,
+      activeFlagCount: 0,
+      recentMessageCount: 0,
+      recentActivityCount: 0,
+    };
   }
 
   // Active = no resolved_at. Most recent first; older issues fade out.
@@ -82,6 +100,21 @@ export async function getMemoryContext(
     .limit(RECENT_MESSAGE_LIMIT);
   const recentChrono = [...recent].reverse();
 
+  // Recent activities. Newest first — the LLM wants to know what the
+  // runner *just* did to ground "how did that go" / "what's next" replies.
+  const activityRows = await db
+    .select({
+      discipline: activities.discipline,
+      startedAt: activities.startedAt,
+      durationS: activities.durationS,
+      metrics: activities.metrics,
+      longRun: activities.longRun,
+    })
+    .from(activities)
+    .where(eq(activities.athleteId, athleteId))
+    .orderBy(desc(activities.startedAt))
+    .limit(RECENT_ACTIVITY_LIMIT);
+
   return {
     text: formatContext({
       name: athlete.name,
@@ -90,12 +123,22 @@ export async function getMemoryContext(
       flags: flagRows,
       block,
       messages: recentChrono,
+      activities: activityRows,
     }),
     athleteName: athlete.name,
     activeFlagCount: flagRows.length,
     recentMessageCount: recentChrono.length,
+    recentActivityCount: activityRows.length,
   };
 }
+
+export type ActivityRow = {
+  discipline: string;
+  startedAt: Date;
+  durationS: number;
+  metrics: unknown;
+  longRun: boolean;
+};
 
 type FormatInput = {
   name: string | null;
@@ -119,7 +162,47 @@ type FormatInput = {
     body: string;
     receivedAt: Date;
   }>;
+  activities?: Array<ActivityRow>;
 };
+
+function formatDuration(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return `${h}h${m.toString().padStart(2, "0")}`;
+}
+
+function formatPace(secondsPerKm: number): string {
+  const m = Math.floor(secondsPerKm / 60);
+  const s = Math.round(secondsPerKm - m * 60);
+  return `${m}:${s.toString().padStart(2, "0")}/km`;
+}
+
+// One line per activity. Optional fields (distance, pace, HR) drop out
+// quietly when absent — strength sessions don't have a pace, etc.
+export function formatActivityLine(a: ActivityRow): string {
+  const date = a.startedAt.toISOString().slice(0, 10);
+  const label = a.longRun ? `long ${a.discipline}` : a.discipline;
+  const main = `${date} ${label} ${formatDuration(a.durationS)}`;
+
+  const m: Record<string, unknown> =
+    a.metrics && typeof a.metrics === "object" && !Array.isArray(a.metrics)
+      ? (a.metrics as Record<string, unknown>)
+      : {};
+  const distM = typeof m.distance_m === "number" ? m.distance_m : null;
+  const paceS =
+    typeof m.avg_pace_s_per_km === "number" ? m.avg_pace_s_per_km : null;
+  const hr = typeof m.avg_hr === "number" ? Math.round(m.avg_hr) : null;
+
+  const details: string[] = [];
+  if (distM !== null && distM > 0) {
+    let d = `${(distM / 1000).toFixed(1)} km`;
+    if (paceS !== null && paceS > 0) d += ` @ ${formatPace(paceS)}`;
+    details.push(d);
+  }
+  if (hr !== null) details.push(`HR ${hr}`);
+
+  return details.length > 0 ? `  ${main} — ${details.join(", ")}` : `  ${main}`;
+}
 
 // Plain-text, scannable, easy for an LLM to parse and for a human to
 // debug. Each section is omitted entirely when empty so we don't waste
@@ -154,6 +237,11 @@ export function formatContext(input: FormatInput): string {
       .map((f) => `  - ${f.kind}: ${f.body} (since ${f.startedAt.toISOString().slice(0, 10)})`)
       .join("\n");
     parts.push(`Active flags:\n${flagLines}`);
+  }
+
+  if (input.activities && input.activities.length > 0) {
+    const lines = input.activities.map(formatActivityLine).join("\n");
+    parts.push(`Recent training (newest first):\n${lines}`);
   }
 
   if (input.messages.length > 0) {

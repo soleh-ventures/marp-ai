@@ -4,6 +4,8 @@ import { config } from "./config.js";
 import { ping } from "./db/client.js";
 import { validateAllPrompts } from "./router/prompts.js";
 import { twilioWebhook } from "./webhooks/twilio.js";
+import { stravaWebhook } from "./webhooks/strava.js";
+import { stravaAuth } from "./routes/strava-auth.js";
 
 // Fail loud at boot if any prompt file is missing or unparseable. Better
 // than discovering it when the first runner texts MARP.
@@ -14,6 +16,8 @@ export const app = new Hono();
 app.get("/", (c) => c.text("marp-ai"));
 
 app.route("/webhooks/twilio", twilioWebhook);
+app.route("/webhooks/strava", stravaWebhook);
+app.route("/auth/strava", stravaAuth);
 
 app.get("/health", async (c) => {
   const dbOk = await ping();

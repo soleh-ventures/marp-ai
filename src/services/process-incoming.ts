@@ -9,6 +9,12 @@ import {
 import { getMemoryContext } from "../memory/retrieve.js";
 import { route } from "../router/index.js";
 import { sendWhatsApp, TwilioSendError } from "./twilio-send.js";
+import {
+  buildConnectReply,
+  buildOnboardingStravaOffer,
+  getStravaConnectStatus,
+  looksLikeStravaConnect,
+} from "./strava-connect.js";
 
 // Fired from the webhook AFTER we've returned 200 to Twilio. Branches:
 //   - Athlete not onboarded → onboarding flow (one LLM call, extracts +
@@ -52,6 +58,18 @@ export async function processIncomingMessage(
       body,
     );
     replyText = onboardingResult.reply;
+
+    // When onboarding wraps up this turn, append a Strava connect offer
+    // so the runner can link their account right away.
+    if (onboardingResult.finishedThisTurn) {
+      const offer = await buildOnboardingStravaOffer(athleteId).catch(() => null);
+      if (offer) replyText += offer;
+    }
+  } else if (looksLikeStravaConnect(body)) {
+    // Explicit Strava connect intent — skip the expert router and reply
+    // with the magic link directly. No LLM call needed.
+    const status = await getStravaConnectStatus(athleteId);
+    replyText = buildConnectReply(status);
   } else {
     // Normal expert routing branch.
     const memory = await getMemoryContext(athleteId);

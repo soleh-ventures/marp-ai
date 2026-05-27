@@ -50,5 +50,24 @@ export const config = {
     classifierModel: process.env.LLM_CLASSIFIER_MODEL ?? "claude-haiku-4-5",
     domainModel: process.env.LLM_DOMAIN_MODEL ?? "claude-sonnet-4-6",
     synthesizerModel: process.env.LLM_SYNTHESIZER_MODEL ?? "claude-sonnet-4-6",
+    // Binder runs on every free-form fork reply. Separate var so we can
+    // tune classifier ↔ binder independently (eng review CQ1).
+    binderModel: process.env.LLM_BINDER_MODEL ?? "claude-haiku-4-5",
+  },
+  strava: {
+    clientId: process.env.STRAVA_CLIENT_ID ?? "",
+    clientSecret: process.env.STRAVA_CLIENT_SECRET ?? "",
+    // Used for hub.challenge verify on subscription creation AND HMAC
+    // verify on each incoming webhook POST.
+    webhookVerifyToken: process.env.STRAVA_WEBHOOK_VERIFY_TOKEN ?? "",
+    // 32-byte hex key for AES-256-GCM token encryption-at-rest.
+    // Required when Strava is in use; fall through to empty in dev so
+    // unit tests that don't touch Strava don't have to set it.
+    tokenEncryptionKey: process.env.STRAVA_TOKEN_ENCRYPTION_KEY ?? "",
+  },
+  magicLink: {
+    // Dedicated secret — NOT reused from TWILIO_AUTH_TOKEN per eng A3.
+    secret: process.env.MAGIC_LINK_SECRET ?? "",
+    ttlSeconds: 300, // 5 minutes; eng-review A3.
   },
 };
