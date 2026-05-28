@@ -12,7 +12,6 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import { sql } from "drizzle-orm";
 
 // ─── enums ────────────────────────────────────────────────────────────────
 
@@ -98,8 +97,8 @@ export const activities = pgTable(
     source: activitySourceEnum("source").notNull(),
     // Provider-side id (e.g. Strava activity id as text). Used to dedupe
     // when a webhook redelivers the same create event. Unique per (source,
-    // source_id) via partial index below — NULL allowed for legacy / manual
-    // entries with no provider id.
+    // source_id) — Postgres treats NULLs as distinct in unique indexes by
+    // default, so legacy / manual entries with NULL source_id still coexist.
     sourceId: text("source_id"),
     startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
     durationS: integer("duration_s").notNull(),
@@ -113,11 +112,11 @@ export const activities = pgTable(
   (t) => [
     index("activities_athlete_started_idx").on(t.athleteId, t.startedAt),
     index("activities_race_block_idx").on(t.raceBlockId),
-    // Partial unique index — NULLs don't conflict, so manual entries can
-    // coexist with deduped provider rows.
-    uniqueIndex("activities_source_source_id_idx")
-      .on(t.source, t.sourceId)
-      .where(sql`${t.sourceId} IS NOT NULL`),
+    // Required by the webhook ingest's ON CONFLICT (source, source_id).
+    // Postgres treats NULLs as distinct in unique indexes, so manual /
+    // legacy rows with NULL source_id coexist without a partial WHERE
+    // (and a partial index here would break ON CONFLICT matching).
+    uniqueIndex("activities_source_source_id_idx").on(t.source, t.sourceId),
   ],
 );
 
