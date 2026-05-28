@@ -7,6 +7,7 @@ import {
   athletes,
   messages,
   raceBlocks,
+  stravaConnections,
 } from "../db/schema.js";
 import {
   formatActivityLine,
@@ -18,7 +19,7 @@ beforeEach(async () => {
   await db.execute(sql`
     TRUNCATE TABLE
       llm_calls, processed_messages, messages, active_flags,
-      activities, race_blocks, athletes
+      activities, race_blocks, strava_connections, athletes
     RESTART IDENTITY CASCADE
   `);
 });
@@ -30,6 +31,7 @@ describe("getMemoryContext", () => {
     expect(ctx.athleteName).toBeNull();
     expect(ctx.activeFlagCount).toBe(0);
     expect(ctx.recentMessageCount).toBe(0);
+    expect(ctx.stravaStatus).toBe("not_connected");
   });
 
   test("known athlete with no flags / no messages renders just the profile", async () => {
@@ -48,6 +50,8 @@ describe("getMemoryContext", () => {
     expect(ctx.text).toContain("Sarah");
     expect(ctx.text).toContain("en-US");
     expect(ctx.text).toContain("years_running");
+    expect(ctx.text).toContain("Strava: not connected");
+    expect(ctx.stravaStatus).toBe("not_connected");
     expect(ctx.activeFlagCount).toBe(0);
     expect(ctx.recentMessageCount).toBe(0);
   });
@@ -123,6 +127,79 @@ describe("getMemoryContext", () => {
     expect(idx24).toBeGreaterThan(idx05);
     // msg-04 falls outside the cap.
     expect(ctx.text).not.toContain("msg-04");
+  });
+
+  test("surfaces Strava: connected line when active connection exists, even with zero activities", async () => {
+    const [a] = await db
+      .insert(athletes)
+      .values({ phone: "+15551110097", name: "Connected" })
+      .returning();
+    if (!a) throw new Error("insert failed");
+    await db.insert(stravaConnections).values({
+      athleteId: a.id,
+      stravaAthleteId: 12345,
+      encryptedAccessToken: "x",
+      encryptedRefreshToken: "y",
+      tokenExpiresAt: new Date(Date.now() + 3600_000),
+      scope: "read,activity:read_all",
+    });
+    const ctx = await getMemoryContext(a.id);
+    expect(ctx.stravaStatus).toBe("connected");
+    expect(ctx.text).toContain("Strava: connected");
+    // No activities → expect the explanatory tail so the LLM doesn't
+    // mistake the empty list for "not connected".
+    expect(ctx.text).toContain("no activities recorded yet");
+  });
+
+  test("surfaces Strava: connected (no tail) once activities exist", async () => {
+    const [a] = await db
+      .insert(athletes)
+      .values({ phone: "+15551110096", name: "Active" })
+      .returning();
+    if (!a) throw new Error("insert failed");
+    await db.insert(stravaConnections).values({
+      athleteId: a.id,
+      stravaAthleteId: 67890,
+      encryptedAccessToken: "x",
+      encryptedRefreshToken: "y",
+      tokenExpiresAt: new Date(Date.now() + 3600_000),
+      scope: "read,activity:read_all",
+    });
+    await db.insert(activities).values({
+      athleteId: a.id,
+      discipline: "run",
+      source: "strava",
+      sourceId: "s-active-1",
+      startedAt: new Date("2026-05-26T06:30:00Z"),
+      durationS: 3600,
+      metrics: { distance_m: 10_000, avg_pace_s_per_km: 360 },
+      longRun: false,
+    });
+    const ctx = await getMemoryContext(a.id);
+    expect(ctx.stravaStatus).toBe("connected");
+    expect(ctx.text).toContain("Strava: connected");
+    expect(ctx.text).not.toContain("no activities recorded yet");
+  });
+
+  test("flags revoked Strava so the LLM can prompt a reconnect", async () => {
+    const [a] = await db
+      .insert(athletes)
+      .values({ phone: "+15551110095", name: "Revoked" })
+      .returning();
+    if (!a) throw new Error("insert failed");
+    await db.insert(stravaConnections).values({
+      athleteId: a.id,
+      stravaAthleteId: 24680,
+      encryptedAccessToken: "x",
+      encryptedRefreshToken: "y",
+      tokenExpiresAt: new Date(Date.now() + 3600_000),
+      scope: "read,activity:read_all",
+      revokedAt: new Date(),
+    });
+    const ctx = await getMemoryContext(a.id);
+    expect(ctx.stravaStatus).toBe("revoked");
+    expect(ctx.text).toContain("revoked");
+    expect(ctx.text).toContain("reconnect");
   });
 });
 

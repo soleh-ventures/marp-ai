@@ -6,6 +6,7 @@ import {
   athletes,
   messages,
   raceBlocks,
+  stravaConnections,
 } from "../db/schema.js";
 
 // How many recent inbound + outbound messages to surface to the LLM as
@@ -19,6 +20,12 @@ const RECENT_MESSAGE_LIMIT = 20;
 // who train less frequently get a longer time window naturally.
 const RECENT_ACTIVITY_LIMIT = 14;
 
+// Whether Strava is currently wired up for this athlete. Surfaced so the
+// LLM can ground its replies — without this, an athlete who's connected
+// but has no synced activities yet gets told "Strava isn't connected"
+// (the LLM was guessing from the absence of activities).
+export type StravaStatus = "connected" | "revoked" | "not_connected";
+
 export type MemoryContext = {
   // The formatted string the router feeds to the domain LLMs.
   text: string;
@@ -28,6 +35,7 @@ export type MemoryContext = {
   activeFlagCount: number;
   recentMessageCount: number;
   recentActivityCount: number;
+  stravaStatus: StravaStatus;
 };
 
 /**
@@ -60,6 +68,7 @@ export async function getMemoryContext(
       activeFlagCount: 0,
       recentMessageCount: 0,
       recentActivityCount: 0,
+      stravaStatus: "not_connected",
     };
   }
 
@@ -100,6 +109,22 @@ export async function getMemoryContext(
     .limit(RECENT_MESSAGE_LIMIT);
   const recentChrono = [...recent].reverse();
 
+  // Strava connection status — surfaced so the LLM has a definitive
+  // signal. The webhook only fires for new/edited activities, so a
+  // freshly-connected athlete legitimately has zero recent runs; without
+  // this line, the LLM guesses "Strava isn't connected" and confuses the
+  // runner.
+  const stravaRows = await db
+    .select({ revokedAt: stravaConnections.revokedAt })
+    .from(stravaConnections)
+    .where(eq(stravaConnections.athleteId, athleteId))
+    .limit(1);
+  const stravaStatus: StravaStatus = !stravaRows[0]
+    ? "not_connected"
+    : stravaRows[0].revokedAt
+      ? "revoked"
+      : "connected";
+
   // Recent activities. Newest first — the LLM wants to know what the
   // runner *just* did to ground "how did that go" / "what's next" replies.
   const activityRows = await db
@@ -124,11 +149,13 @@ export async function getMemoryContext(
       block,
       messages: recentChrono,
       activities: activityRows,
+      stravaStatus,
     }),
     athleteName: athlete.name,
     activeFlagCount: flagRows.length,
     recentMessageCount: recentChrono.length,
     recentActivityCount: activityRows.length,
+    stravaStatus,
   };
 }
 
@@ -163,6 +190,7 @@ type FormatInput = {
     receivedAt: Date;
   }>;
   activities?: Array<ActivityRow>;
+  stravaStatus?: StravaStatus;
 };
 
 function formatDuration(seconds: number): string {
@@ -218,6 +246,22 @@ export function formatContext(input: FormatInput): string {
     parts.push(
       `Athletic history: ${JSON.stringify(input.athleticHistory)}`,
     );
+  }
+
+  if (input.stravaStatus) {
+    const hasActivities = (input.activities?.length ?? 0) > 0;
+    let line: string;
+    if (input.stravaStatus === "connected") {
+      line = hasActivities
+        ? "Strava: connected"
+        : "Strava: connected (no activities recorded yet — only new/edited runs sync going forward)";
+    } else if (input.stravaStatus === "revoked") {
+      line =
+        "Strava: previously connected but access was revoked — the runner needs to reconnect";
+    } else {
+      line = "Strava: not connected";
+    }
+    parts.push(line);
   }
 
   if (input.block) {
