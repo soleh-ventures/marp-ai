@@ -66,6 +66,30 @@ describe("POST /webhooks/strava (event delivery)", () => {
     expect(body.received).toBe(true);
   });
 
+  test("valid activity update event returns 200 (handled same as create)", async () => {
+    // Strava sometimes delivers manual entries as `update` rather than
+    // `create` — see src/webhooks/strava.ts handleActivityEvent. Both
+    // paths run ingestStravaActivity; ON CONFLICT DO NOTHING handles
+    // duplicates.
+    const event = {
+      object_type: "activity",
+      object_id: 99998,
+      aspect_type: "update",
+      owner_id: 12345,
+      subscription_id: 1,
+      event_time: Math.floor(Date.now() / 1000),
+      updates: { title: "Renamed" },
+    };
+    const res = await app.request("/webhooks/strava", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(event),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.received).toBe(true);
+  });
+
   test("malformed body still returns 200 (Strava must not retry)", async () => {
     const res = await app.request("/webhooks/strava", {
       method: "POST",

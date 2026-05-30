@@ -75,6 +75,14 @@ stravaWebhook.post("/", async (c) => {
     return c.json({ received: true });
   }
 
+  // Always log the inbound event shape — we used to silently skip
+  // anything that wasn't a `create`, which made it impossible to tell
+  // from production logs whether Strava was delivering events at all.
+  console.log(
+    `strava webhook event: object_type=${event.object_type} aspect_type=${event.aspect_type} ` +
+      `owner_id=${event.owner_id} object_id=${event.object_id}`,
+  );
+
   // Deauthorization: athlete revoked our access.
   if (
     event.object_type === "athlete" &&
@@ -115,11 +123,13 @@ async function handleDeauthorize(stravaAthleteId: number): Promise<void> {
 }
 
 async function handleActivityEvent(event: StravaEvent): Promise<void> {
-  // We only ingest on `create`. Strava also sends `update` events when an
-  // activity is edited (title change, privacy flip); for v1 we keep the
-  // first-write snapshot and ignore those — re-fetching every edit would
-  // burn API quota for negligible training signal.
-  if (event.aspect_type !== "create") {
+  // Ingest on both `create` and `update`. Strava's docs say manual
+  // entries fire `create`, but in practice we've observed manual entries
+  // (and some app uploads) arriving as `update` instead — without this,
+  // those activities never landed. Ingest uses ON CONFLICT DO NOTHING,
+  // so a true edit of an already-ingested row is a cheap no-op after
+  // the Strava API fetch. Acceptable v1 trade-off vs. losing manual runs.
+  if (event.aspect_type !== "create" && event.aspect_type !== "update") {
     return;
   }
 
@@ -129,6 +139,7 @@ async function handleActivityEvent(event: StravaEvent): Promise<void> {
   const result = await ingestStravaActivity(event.owner_id, event.object_id);
   console.log(
     `strava webhook: ingest owner_id=${event.owner_id} object_id=${event.object_id} ` +
-      `inserted=${result.inserted}${result.reason ? ` reason=${result.reason}` : ""}`,
+      `aspect=${event.aspect_type} inserted=${result.inserted}` +
+      `${result.reason ? ` reason=${result.reason}` : ""}`,
   );
 }
