@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { eq, sql } from "drizzle-orm";
 import { config } from "../config.js";
 import { db } from "../db/client.js";
+import { assertNotProductionDb } from "../db/test-guard.js";
 import { athletes, messages } from "../db/schema.js";
 import { _resetProviderCache, mockProvider } from "../services/llm/index.js";
 import {
@@ -17,6 +18,7 @@ beforeAll(() => {
 });
 
 beforeEach(async () => {
+  assertNotProductionDb();
   await db.execute(sql`
     TRUNCATE TABLE
       llm_calls, processed_messages, messages, active_flags,

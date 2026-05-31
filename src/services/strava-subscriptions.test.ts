@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { sql } from "drizzle-orm";
 import { db } from "../db/client.js";
+import { assertNotProductionDb } from "../db/test-guard.js";
 import {
   buildCallbackUrl,
   clearSubscriptionRecords,
@@ -48,6 +49,7 @@ function stubClient(initial: StravaSubscription[] = []): {
 }
 
 beforeEach(async () => {
+  assertNotProductionDb();
   await db.execute(sql`TRUNCATE TABLE strava_webhook_config RESTART IDENTITY`);
 });
 

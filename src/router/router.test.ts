@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 import { config } from "../config.js";
 import { db } from "../db/client.js";
+import { assertNotProductionDb } from "../db/test-guard.js";
 import { athletes, llmCalls, messages } from "../db/schema.js";
 import { _resetProviderCache, mockProvider } from "../services/llm/index.js";
 import { route } from "./index.js";
@@ -13,6 +14,7 @@ beforeAll(() => {
 });
 
 beforeEach(async () => {
+  assertNotProductionDb();
   await db.execute(sql`
     TRUNCATE TABLE
       llm_calls, processed_messages, messages, active_flags,

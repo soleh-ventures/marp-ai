@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import { app } from "../server.js";
 import { config } from "../config.js";
 import { db } from "../db/client.js";
+import { assertNotProductionDb } from "../db/test-guard.js";
 import { athletes, messages, processedMessages } from "../db/schema.js";
 import { _resetProviderCache, mockProvider } from "../services/llm/index.js";
 import { computeSignature } from "../services/twilio-signature.js";
@@ -29,6 +30,7 @@ beforeAll(() => {
 });
 
 beforeEach(async () => {
+  assertNotProductionDb();
   await db.execute(sql`
     TRUNCATE TABLE
       llm_calls, processed_messages, messages, active_flags,
