@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { athletes } from "../db/schema.js";
+import { redactPhone } from "./phone-redact.js";
 
 // Twilio sends WhatsApp numbers as `whatsapp:+15551234567`. Strip the prefix
 // so the stored phone is a portable E.164 string usable across channels.
@@ -33,6 +34,11 @@ export async function findOrCreateByPhone(rawPhone: string): Promise<Athlete> {
     .from(athletes)
     .where(eq(athletes.phone, phone))
     .limit(1);
-  if (!after[0]) throw new Error(`athlete lookup failed for ${phone}`);
+  // Don't include the raw number in the error — it'll surface in logs /
+  // exception trackers and that's exactly the kind of PII leak we want
+  // to avoid. Redacted form is enough to triage from a Sentry dashboard.
+  if (!after[0]) {
+    throw new Error(`athlete lookup failed for ${redactPhone(phone)}`);
+  }
   return after[0];
 }
