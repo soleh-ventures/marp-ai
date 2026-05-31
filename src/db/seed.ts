@@ -133,7 +133,7 @@ async function main() {
 
   console.log("→ seeding happy path");
   const { athlete } = await seedHappyPath();
-  console.log(`  inserted athlete ${athlete.id} (${athlete.phone})`);
+  console.log(`  inserted athlete ${athlete.id}`);
 
   console.log("→ asserting FK violation on bogus athlete_id");
   await assertForeignKeyEnforced();

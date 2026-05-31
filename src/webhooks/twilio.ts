@@ -59,6 +59,9 @@ twilioWebhook.post("/whatsapp", async (c) => {
   }
 
   const sid = params.MessageSid;
+  // `from` is the runner's WhatsApp phone. PII — never log it directly.
+  // Use the athlete UUID once findOrCreateByPhone resolves, or
+  // redactPhone() from services/phone-redact for pre-resolve sites.
   const from = params.From;
   const bodyText = params.Body ?? "";
   if (!sid || !from) {
