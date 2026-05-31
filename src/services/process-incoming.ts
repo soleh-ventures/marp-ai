@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { athletes, messages } from "../db/schema.js";
 import {
@@ -15,6 +15,13 @@ import {
   getStravaConnectStatus,
   looksLikeStravaConnect,
 } from "./strava-connect.js";
+import { deleteAthlete } from "./erasure.js";
+import {
+  DELETION_CONFIRMATION_PROMPT,
+  DELETION_SUCCESS_MESSAGE,
+  isDeletionConfirmation,
+  looksLikeDeletionRequest,
+} from "./erasure-intent.js";
 
 // Fired from the webhook AFTER we've returned 200 to Twilio. Branches:
 //   - Athlete not onboarded → onboarding flow (one LLM call, extracts +
@@ -46,10 +53,45 @@ export async function processIncomingMessage(
     return;
   }
 
+  // ── Deletion intent (GDPR Article 17) ────────────────────────────────
+  // Checked BEFORE onboarding/strava/router so a runner can delete their
+  // account from any state — including mid-onboarding. Two-phase:
+  //   1. Request matches deletion patterns → reply with the confirmation prompt.
+  //   2. Confirmation phrase exactly matches AND the previous outbound was
+  //      the prompt → execute deletion, send a goodbye message, exit
+  //      without persisting the outbound (the athlete row is gone).
+  if (isDeletionConfirmation(body)) {
+    const lastOutbound = (
+      await db
+        .select({ body: messages.body })
+        .from(messages)
+        .where(and(eq(messages.athleteId, athleteId), eq(messages.direction, "out")))
+        .orderBy(desc(messages.receivedAt))
+        .limit(1)
+    )[0];
+    if (lastOutbound?.body === DELETION_CONFIRMATION_PROMPT) {
+      const phone = athleteRow.phone;
+      await deleteAthlete(athleteId);
+      // sendWhatsApp doesn't touch the DB — safe to call after the row's
+      // gone. We deliberately don't persist this outbound either.
+      sendWhatsApp(phone, DELETION_SUCCESS_MESSAGE).catch((err) =>
+        console.error("erasure: goodbye send failed", err),
+      );
+      return;
+    }
+    // "YES DELETE" without a preceding prompt — fall through to normal
+    // routing (some runner just happened to type that phrase).
+  }
+
   const history = getAthleticHistory(athleteRow.athleticHistory);
 
   let replyText: string;
-  if (!isOnboarded(history)) {
+  if (looksLikeDeletionRequest(body)) {
+    // First-phase deletion request — reply with the confirmation prompt
+    // regardless of onboarding state. The deletion-confirmation branch
+    // above will catch the follow-up.
+    replyText = DELETION_CONFIRMATION_PROMPT;
+  } else if (!isOnboarded(history)) {
     // Onboarding branch. The flow persists the updated athletic_history
     // itself; we just take the reply.
     const onboardingResult = await runOnboardingTurn(
