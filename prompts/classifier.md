@@ -18,10 +18,12 @@ Guide:
 
 Respond with STRICT JSON on a single line. No prose, no markdown fences, no commentary:
 
-{"domains":["training"],"confidence":0.92,"rationale":"asks about taper week structure"}
+{"domains":["training"],"confidence":0.92,"rationale":"asks about taper week structure","is_fork":false,"resolves_decision":null}
 
 Rules:
 - `domains` must be a non-empty array drawn from: training, nutrition, injury, mental, recovery, gear
 - `confidence` is your own 0..1 estimate of routing certainty
 - `rationale` is one short sentence (under 15 words) explaining the routing
+- `is_fork` is `true` when the runner's message is best answered by presenting alternative paths (e.g. "should I rest or run easy today?", "I'm tired and have a tempo on the plan — what should I do?"). It is `false` when the runner's question has a single right answer (e.g. "what's my goal pace?", "how does VDOT work?"). Default to `false` unless the message clearly invites a choice.
+- `resolves_decision` is reserved for a downstream binder step. Always emit `null` here.
 - If the message is unrelated to running (e.g. "hi", "thanks", small talk), pick the single best fit — usually mental — with low confidence and a rationale that says so

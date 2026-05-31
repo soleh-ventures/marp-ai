@@ -22,6 +22,8 @@ import {
   isDeletionConfirmation,
   looksLikeDeletionRequest,
 } from "./erasure-intent.js";
+import { recordFrame } from "./pending-decisions.js";
+import type { DecisionFrame } from "../router/types.js";
 import { archiveAthlete, isDormant, touchLastSeen } from "./dormancy.js";
 import {
   DORMANCY_CHALLENGE_PROMPT,
@@ -141,6 +143,12 @@ export async function processIncomingMessage(
   const history = getAthleticHistory(athleteRow.athleticHistory);
 
   let replyText: string;
+  // ET6: if the expert router emits a decision_frame, we persist it
+  // alongside the outbound message so the binder (ET7) has it to resolve
+  // against a future runner reply. Only the routing branch produces
+  // frames in v1 — onboarding / Strava-connect / dormancy / erasure
+  // prompts are single-answer.
+  let routerFrame: DecisionFrame | null = null;
   if (looksLikeDeletionRequest(body)) {
     // First-phase deletion request — reply with the confirmation prompt
     // regardless of onboarding state. The deletion-confirmation branch
@@ -177,6 +185,7 @@ export async function processIncomingMessage(
       contextSummary: memory.text,
     });
     replyText = result.finalText.trim();
+    routerFrame = result.frame;
   }
 
   if (!replyText) {
@@ -184,21 +193,41 @@ export async function processIncomingMessage(
     return;
   }
 
-  await sendAndPersist(athleteId, athleteRow.phone, replyText);
+  const { outboundMessageId } = await sendAndPersist(
+    athleteId,
+    athleteRow.phone,
+    replyText,
+  );
+
+  // ET6 + ET8: record the pending decision after we have the outbound
+  // id (the back-pointer the binder uses). If Twilio send failed,
+  // outboundMessageId is null; we still persist the frame with a null
+  // message_id so the binder can match against it (rare path, but
+  // skipping the frame entirely would be worse — the runner might
+  // re-ask and the structured fork would be lost).
+  if (routerFrame) {
+    try {
+      await recordFrame(athleteId, outboundMessageId, routerFrame);
+    } catch (err) {
+      console.error("processIncoming: recordFrame failed", err);
+    }
+  }
 }
 
 // Send a reply via Twilio and persist the outbound row. Centralised so
 // the dormancy / erasure-prompt branches can use the same pipeline as
 // the normal routing branch — they need the outbound persisted too so
 // the next inbound's "lastOutbound" check works.
+//
+// Returns the inserted outbound message_id so the caller can wire it
+// into related rows (pending_decisions back-pointer for ET6). When the
+// Twilio send fails, outboundMessageId is null and the inbound message
+// is already persisted — no rollback needed.
 async function sendAndPersist(
   athleteId: string,
   phone: string,
   body: string,
-): Promise<void> {
-  // Send via Twilio. If the API rejects (bad number, sandbox not
-  // joined, rate limit), log and keep going — the inbound message is
-  // already persisted, no rollback needed.
+): Promise<{ outboundMessageId: string | null }> {
   let outboundSid: string | undefined;
   try {
     const sendResult = await sendWhatsApp(phone, body);
@@ -211,14 +240,18 @@ async function sendAndPersist(
     } else {
       console.error("Twilio send threw:", (err as Error).message);
     }
-    return;
+    return { outboundMessageId: null };
   }
 
   // Persist the outbound message for the next turn's memory retrieval.
-  await db.insert(messages).values({
-    athleteId,
-    direction: "out",
-    body,
-    twilioMessageSid: outboundSid,
-  });
+  const [inserted] = await db
+    .insert(messages)
+    .values({
+      athleteId,
+      direction: "out",
+      body,
+      twilioMessageSid: outboundSid,
+    })
+    .returning({ id: messages.id });
+  return { outboundMessageId: inserted?.id ?? null };
 }
