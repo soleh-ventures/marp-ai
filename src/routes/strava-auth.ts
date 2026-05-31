@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import { verifyMagicToken } from "../services/strava-magic-link.js";
 import { buildAuthorizationUrl, exchangeCode } from "../services/strava-api.js";
 import { upsertStravaConnection } from "../services/strava-connections.js";
+import { backfillStravaHistory } from "../services/strava-backfill.js";
 import { sendWhatsApp } from "../services/twilio-send.js";
 
 export const stravaAuth = new Hono();
@@ -93,7 +94,11 @@ stravaAuth.get("/callback", async (c) => {
     const tokens = await exchangeCode(code, cb);
     await upsertStravaConnection(athleteId, tokens);
 
-    // Confirm to the runner via WhatsApp.
+    // Confirm to the runner via WhatsApp. We backfill ~60 days of history
+    // in the background (1–2 API calls) and send a single consolidated
+    // message once that finishes, so the runner sees the count of past
+    // activities loaded — no second WhatsApp ping, no waiting on the
+    // OAuth success page.
     const rows = await db
       .select({ phone: athletes.phone })
       .from(athletes)
@@ -101,9 +106,20 @@ stravaAuth.get("/callback", async (c) => {
       .limit(1);
     const phone = rows[0]?.phone;
     if (phone) {
-      sendWhatsApp(phone, "✅ Strava connected! I can now see your runs automatically. Get back to training — MARP's got the data side covered.").catch(
-        (err) => console.error("strava callback: WhatsApp confirm failed", err),
-      );
+      backfillStravaHistory(athleteId)
+        .then(({ inserted }) => {
+          const tail =
+            inserted > 0
+              ? ` I pulled in your last ${inserted} ${inserted === 1 ? "activity" : "activities"} (up to 60 days) — caught up on your recent training.`
+              : " New runs will sync as you log them.";
+          return sendWhatsApp(phone, "✅ Strava connected!" + tail);
+        })
+        .catch((err) => {
+          console.error("strava callback: backfill or confirm failed", err);
+          // Don't leave the runner hanging if backfill blew up — still
+          // confirm the connection itself succeeded.
+          sendWhatsApp(phone, "✅ Strava connected!").catch(() => {});
+        });
     }
 
     return c.html(
