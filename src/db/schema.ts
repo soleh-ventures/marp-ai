@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   bigint,
   boolean,
@@ -47,16 +48,40 @@ export const llmComponentEnum = pgEnum("llm_component", [
 
 // ─── athletes ─────────────────────────────────────────────────────────────
 
-export const athletes = pgTable("athletes", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  phone: text("phone").notNull().unique(),
-  name: text("name"),
-  locale: text("locale").notNull().default("en"),
-  athleticHistory: jsonb("athletic_history"),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const athletes = pgTable(
+  "athletes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // Not directly unique — the partial index below enforces uniqueness
+    // only across non-archived rows so an archived account can free its
+    // phone number for a fresh row (phone-churn / number-recycling).
+    phone: text("phone").notNull(),
+    name: text("name"),
+    locale: text("locale").notNull().default("en"),
+    athleticHistory: jsonb("athletic_history"),
+    // Updated on every inbound message. Read by the dormancy detection
+    // to decide whether to send a re-auth challenge before resuming.
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    // Set when the runner chooses "NEW" in response to a dormancy
+    // challenge (or when the operator archives via admin tool). The
+    // row is preserved (audit) but its phone is no longer matched on
+    // inbound lookups, so the next message creates a fresh athlete.
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // Partial unique index — enforces "at most one active athlete per
+    // phone." Archived rows are exempt so the same phone can host a
+    // new account after a NEW choice.
+    uniqueIndex("athletes_phone_active_idx")
+      .on(t.phone)
+      .where(sql`${t.archivedAt} IS NULL`),
+  ],
+);
 
 // ─── race_blocks ──────────────────────────────────────────────────────────
 
