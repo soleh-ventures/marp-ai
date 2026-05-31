@@ -12,6 +12,9 @@ export type LlmComponent =
   | "synthesizer"
   | "memory"
   | "content"
+  // ET2: binder runs after every free-form reply to resolve pending
+  // decision frames. Kept separate so its cost is visible per-component.
+  | "binder"
   | "other";
 
 export type CallContext = {

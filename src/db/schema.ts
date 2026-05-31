@@ -12,6 +12,7 @@ import {
   timestamp,
   uniqueIndex,
   uuid,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 
 // ─── enums ────────────────────────────────────────────────────────────────
@@ -43,6 +44,10 @@ export const llmComponentEnum = pgEnum("llm_component", [
   "synthesizer",
   "memory",
   "content",
+  // ET2: binder runs on every free-form reply that might resolve a
+  // pending decision. Lives in its own enum value so cost / latency
+  // telemetry isn't lumped under "other".
+  "binder",
   "other",
 ]);
 
@@ -180,8 +185,75 @@ export const messages = pgTable(
     receivedAt: timestamp("received_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    // ET8: back-pointer for inbound messages that resolved a pending
+    // decision (set by the binder service). NULL for every message that
+    // didn't close a fork — including all outbound. SET NULL on decision
+    // delete so an erasure-cascade doesn't break referential integrity.
+    resolvesPendingDecisionId: uuid("resolves_pending_decision_id").references(
+      (): AnyPgColumn => pendingDecisions.id,
+      { onDelete: "set null" },
+    ),
   },
   (t) => [index("messages_athlete_received_idx").on(t.athleteId, t.receivedAt)],
+);
+
+// ─── pending_decisions (ET8: binder chain) ────────────────────────────────
+//
+// When a domain or synthesizer reply contains a fork ("you could do A
+// or B"), it emits a structured decision_frame that we persist here.
+// The binder then matches future runner replies against open frames so
+// MARP remembers what it asked, not just what it said.
+//
+// Resolution lifecycle:
+//   - row inserted with resolved_at NULL when the outbound message ships
+//   - binder sets resolved_at + resolved_key when an inbound message
+//     matches a frame option
+//   - the matching inbound's messages.resolves_pending_decision_id back-
+//     points here for the binder's regex lookup
+//
+// FK rules per CEO S2 spec:
+//   - athlete_id: CASCADE — erasure removes pending decisions too
+//   - message_id (the outbound that posed the question): SET NULL —
+//     the decision survives if we ever moderate-delete an outbound, the
+//     resolution still has value
+//
+// Partial index on (athlete_id) WHERE resolved_at IS NULL keeps the
+// binder's hot query — "open decisions for this athlete" — cheap.
+
+export const pendingDecisions = pgTable(
+  "pending_decisions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    athleteId: uuid("athlete_id")
+      .notNull()
+      .references(() => athletes.id, { onDelete: "cascade" }),
+    messageId: uuid("message_id").references(() => messages.id, {
+      onDelete: "set null",
+    }),
+    // Structured frame emitted by domain/synthesizer when is_fork=true.
+    // Shape locked by ET6 (decision-frame schema):
+    //   {
+    //     question: string,          // human-readable summary of the fork
+    //     options: [
+    //       { key: string,           // stable identifier ("rest", "easy_run")
+    //         label: string,         // user-facing label
+    //         action_hint?: string } // optional 1-line rationale
+    //     ]
+    //   }
+    frame: jsonb("frame").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    // Which option (by `key` in frame.options) the runner chose. Populated
+    // together with resolved_at; NULL while pending.
+    resolvedKey: text("resolved_key"),
+  },
+  (t) => [
+    index("pending_decisions_unresolved_idx")
+      .on(t.athleteId)
+      .where(sql`${t.resolvedAt} IS NULL`),
+  ],
 );
 
 // ─── processed_messages (idempotency) ─────────────────────────────────────
