@@ -54,4 +54,45 @@ describe("parseRouting", () => {
     );
     expect(r.domains).toEqual(["nutrition"]);
   });
+
+  // ── ET5: is_fork + resolves_decision ────────────────────────────────
+
+  test("defaults isFork=false and resolvesDecision=null when the LLM omits them", () => {
+    const r = parseRouting(
+      '{"domains":["training"],"confidence":0.9,"rationale":""}',
+    );
+    expect(r.isFork).toBe(false);
+    expect(r.resolvesDecision).toBeNull();
+  });
+
+  test("parses isFork=true when the classifier flags a fork", () => {
+    const r = parseRouting(
+      '{"domains":["training"],"confidence":0.85,"rationale":"two-path question","is_fork":true,"resolves_decision":null}',
+    );
+    expect(r.isFork).toBe(true);
+    expect(r.resolvesDecision).toBeNull();
+  });
+
+  test("parses resolvesDecision when classifier emits a key", () => {
+    // Classifier emits null in v1 (the binder owns matching), but the
+    // parser still has to accept a string for forward-compat.
+    const r = parseRouting(
+      '{"domains":["training"],"confidence":0.95,"rationale":"short choice reply","is_fork":false,"resolves_decision":"rest"}',
+    );
+    expect(r.resolvesDecision).toBe("rest");
+  });
+
+  test("treats truthy non-bool is_fork as false (strict bool only)", () => {
+    const r = parseRouting(
+      '{"domains":["training"],"confidence":0.5,"rationale":"","is_fork":"yes"}',
+    );
+    expect(r.isFork).toBe(false);
+  });
+
+  test("treats empty-string resolves_decision as null", () => {
+    const r = parseRouting(
+      '{"domains":["training"],"confidence":0.5,"rationale":"","is_fork":false,"resolves_decision":""}',
+    );
+    expect(r.resolvesDecision).toBeNull();
+  });
 });

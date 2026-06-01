@@ -68,6 +68,15 @@ export function parseRouting(raw: string): Routing {
     typeof obj.confidence === "number" ? obj.confidence : 0.5;
   const rationale =
     typeof obj.rationale === "string" ? obj.rationale : "";
+  // ET5: new fields. Default to safe values when the LLM doesn't emit
+  // them (e.g. older prompts in flight during a deploy) — isFork false
+  // means the rest of the pipeline runs unchanged, resolvesDecision null
+  // means we defer to the binder.
+  const isFork = obj.is_fork === true;
+  const resolvesDecision =
+    typeof obj.resolves_decision === "string" && obj.resolves_decision.length > 0
+      ? obj.resolves_decision
+      : null;
   // De-dupe while preserving order.
   const seen = new Set<string>();
   const unique = domains.filter((d) =>
@@ -77,5 +86,7 @@ export function parseRouting(raw: string): Routing {
     domains: unique as Routing["domains"],
     confidence,
     rationale,
+    isFork,
+    resolvesDecision,
   };
 }
