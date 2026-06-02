@@ -24,6 +24,7 @@ import {
 } from "./erasure-intent.js";
 import { recordFrame } from "./pending-decisions.js";
 import { bindReply } from "./binder.js";
+import { detectFlags } from "./flag-detector.js";
 import type { DecisionFrame } from "../router/types.js";
 import { archiveAthlete, isDormant, touchLastSeen } from "./dormancy.js";
 import {
@@ -141,17 +142,23 @@ export async function processIncomingMessage(
   // drift this.
   await touchLastSeen(athleteId);
 
-  // ── Binder (ET7) ─────────────────────────────────────────────────────
-  // Try to resolve any pending decision the runner might be answering.
-  // Cheap when there are no open frames (single DB hit, early return);
-  // a Haiku call only when an open frame exists AND the runner's reply
-  // didn't match a key exactly. Errors are swallowed — a failed bind
+  // ── Binder (ET7) + Flag detection (T11) ─────────────────────────────
+  // Both writes happen BEFORE the routing branch so the routing call's
+  // getMemoryContext sees them. The runner says "my Achilles is sore"
+  // → flag is created here → memory context lists it → MARP can
+  // acknowledge it in the SAME reply rather than waiting one turn.
+  //
+  // Run in parallel — they touch different tables and don't observe
+  // each other. Errors are swallowed; a failed flag-detect or bind
   // shouldn't block the reply.
-  try {
-    await bindReply(athleteId, messageId, body);
-  } catch (err) {
-    console.error("binder threw:", err);
-  }
+  await Promise.all([
+    bindReply(athleteId, messageId, body).catch((err) => {
+      console.error("binder threw:", err);
+    }),
+    detectFlags(athleteId, messageId, body).catch((err) => {
+      console.error("flag-detector threw:", err);
+    }),
+  ]);
 
   const history = getAthleticHistory(athleteRow.athleticHistory);
 
