@@ -23,6 +23,7 @@ import {
   looksLikeDeletionRequest,
 } from "./erasure-intent.js";
 import { recordFrame } from "./pending-decisions.js";
+import { bindReply } from "./binder.js";
 import type { DecisionFrame } from "../router/types.js";
 import { archiveAthlete, isDormant, touchLastSeen } from "./dormancy.js";
 import {
@@ -139,6 +140,18 @@ export async function processIncomingMessage(
   // fresh timestamp. Done before routing so even a slow LLM call won't
   // drift this.
   await touchLastSeen(athleteId);
+
+  // ── Binder (ET7) ─────────────────────────────────────────────────────
+  // Try to resolve any pending decision the runner might be answering.
+  // Cheap when there are no open frames (single DB hit, early return);
+  // a Haiku call only when an open frame exists AND the runner's reply
+  // didn't match a key exactly. Errors are swallowed — a failed bind
+  // shouldn't block the reply.
+  try {
+    await bindReply(athleteId, messageId, body);
+  } catch (err) {
+    console.error("binder threw:", err);
+  }
 
   const history = getAthleticHistory(athleteRow.athleticHistory);
 
