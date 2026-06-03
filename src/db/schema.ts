@@ -281,6 +281,13 @@ export const llmCalls = pgTable(
     model: text("model").notNull(),
     tokensIn: integer("tokens_in").notNull(),
     tokensOut: integer("tokens_out").notNull(),
+    // T6: Anthropic prompt-cache telemetry. cache_hit is the convenience
+    // flag for `SELECT count(*) WHERE cache_hit` style queries;
+    // cache_read_tokens carries the per-call breakdown so cost analysis
+    // can compute "would we have paid more without caching?" Both default
+    // to 0/false so non-Anthropic providers (mock) leave them untouched.
+    cacheHit: boolean("cache_hit").notNull().default(false),
+    cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
     costEstimateUsd: doublePrecision("cost_estimate_usd").notNull(),
     latencyMs: integer("latency_ms").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })

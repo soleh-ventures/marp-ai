@@ -17,10 +17,24 @@ const PRICES: Record<string, Price> = {
   mock: { inputPerM: 0, outputPerM: 0 },
 };
 
+// Anthropic prompt-cache pricing multipliers, applied per-token:
+//   regular input: 1.0x
+//   cache-read:    0.10x (90% off)
+//   cache-create:  1.25x (one-time, 25% premium)
+//
+// We don't track cache_create separately for cost — it's a one-time
+// hit per prompt edit, rare in production, and treating it as regular
+// input is a tiny under-estimate (~25% extra on the first call after
+// each prompt change). Cache-read, by contrast, fires on EVERY
+// subsequent call to the same prompt — that's where the 70% cost
+// savings actually live, and where accurate accounting matters.
+const CACHE_READ_MULTIPLIER = 0.10;
+
 export function estimateCostUsd(
   model: string,
   tokensIn: number,
   tokensOut: number,
+  cacheReadTokens: number = 0,
 ): number {
   const p = PRICES[model];
   if (!p) {
@@ -29,8 +43,15 @@ export function estimateCostUsd(
     // notice when prices haven't been added.
     return 0;
   }
+  // Split tokensIn into the regular and cache-read portions.
+  // cacheReadTokens > tokensIn shouldn't happen (the provider sums them
+  // for tokensIn), but clamp defensively so a bad upstream value can't
+  // produce a negative cost.
+  const cacheRead = Math.min(Math.max(cacheReadTokens, 0), tokensIn);
+  const regularIn = tokensIn - cacheRead;
   return (
-    (tokensIn / 1_000_000) * p.inputPerM +
+    (regularIn / 1_000_000) * p.inputPerM +
+    (cacheRead / 1_000_000) * p.inputPerM * CACHE_READ_MULTIPLIER +
     (tokensOut / 1_000_000) * p.outputPerM
   );
 }

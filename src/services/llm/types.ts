@@ -23,13 +23,29 @@ export type LlmRequest = {
 
 export type LlmResponse = {
   text: string;
+  // Total input tokens consumed = fresh + cacheRead + cacheCreate. Keep
+  // this as the "what was the volume" figure for analytics; cost math
+  // splits it back out via the breakdown below.
   tokensIn: number;
   tokensOut: number;
+  // Subset of tokensIn that was served from the prompt cache. Anthropic
+  // bills these at 10% of the base input rate, so pricing must split
+  // them out — otherwise we'd over-report cost by ~3-5x once caching
+  // kicks in on the long domain / synthesizer prompts.
+  cacheReadTokens: number;
+  // Subset of tokensIn that wrote a new cache entry (first call to a
+  // freshly-edited prompt, or after a 5-minute idle expiry). Anthropic
+  // bills these at 125% of the base rate. Kept separate for accurate
+  // cost telemetry; treated as regular input cost in v1 pricing math
+  // (slight under-estimate — the worst case is one over-priced cache
+  // creation per prompt edit, which is rare).
+  cacheCreateTokens: number;
   // Wall-clock latency from request send to response received, in ms.
   latencyMs: number;
-  // True when this call's input was served (mostly) from the prompt cache.
-  // Currently informational — useful for verifying caching actually fires
-  // in prod logs.
+  // Convenience: true when this call's input was served (mostly) from
+  // the prompt cache. Equivalent to cacheReadTokens > cacheCreateTokens.
+  // Surfaced separately so analytics can do COUNT(*) WHERE cache_hit
+  // without needing the breakdown.
   cacheHit: boolean;
 };
 

@@ -40,7 +40,17 @@ export async function llmCall(
     model: req.model,
     tokensIn: res.tokensIn,
     tokensOut: res.tokensOut,
-    costEstimateUsd: estimateCostUsd(req.model, res.tokensIn, res.tokensOut),
+    // T6: persist the cache telemetry so we can verify caching is firing
+    // in prod (SELECT count(*) FROM llm_calls WHERE cache_hit) and so the
+    // cost estimate reflects the 10% rate on cache-read tokens.
+    cacheHit: res.cacheHit,
+    cacheReadTokens: res.cacheReadTokens,
+    costEstimateUsd: estimateCostUsd(
+      req.model,
+      res.tokensIn,
+      res.tokensOut,
+      res.cacheReadTokens,
+    ),
     latencyMs: res.latencyMs,
   });
   return res;
