@@ -25,6 +25,7 @@ import {
 import { recordFrame } from "./pending-decisions.js";
 import { bindReply } from "./binder.js";
 import { detectFlags } from "./flag-detector.js";
+import { autoTransitionStaleBlocks } from "../memory/summarize.js";
 import type { DecisionFrame } from "../router/types.js";
 import { archiveAthlete, isDormant, touchLastSeen } from "./dormancy.js";
 import {
@@ -157,6 +158,13 @@ export async function processIncomingMessage(
     }),
     detectFlags(athleteId, messageId, body).catch((err) => {
       console.error("flag-detector threw:", err);
+    }),
+    // T8: detect active race blocks past their race_date + grace and
+    // transition + summarize them. Cheap when there's nothing to do
+    // (single SELECT); the summarizer LLM call only fires for stale
+    // blocks and runs fire-and-forget inside.
+    autoTransitionStaleBlocks(athleteId).catch((err) => {
+      console.error("autoTransitionStaleBlocks threw:", err);
     }),
   ]);
 
