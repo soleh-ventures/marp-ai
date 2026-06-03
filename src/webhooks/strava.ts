@@ -80,8 +80,26 @@ stravaWebhook.post("/", async (c) => {
   // from production logs whether Strava was delivering events at all.
   console.log(
     `strava webhook event: object_type=${event.object_type} aspect_type=${event.aspect_type} ` +
-      `owner_id=${event.owner_id} object_id=${event.object_id}`,
+      `owner_id=${event.owner_id} object_id=${event.object_id} ` +
+      `subscription_id=${event.subscription_id}`,
   );
+
+  // Subscription-id check: Strava doesn't sign webhook POSTs (their
+  // API has no HMAC mechanism for events), so the only origin
+  // validation we can do server-side is "does this event's
+  // subscription_id match the one we registered?" An attacker who
+  // learns our public webhook URL would have to also know our exact
+  // numeric subscription_id to slip events past this check. We ack 200
+  // either way so a misdirected event doesn't make Strava retry
+  // forever, but we log the mismatch + skip processing.
+  const subscriptionOk = await isExpectedSubscription(event.subscription_id);
+  if (!subscriptionOk) {
+    console.warn(
+      `strava webhook event REJECTED: subscription_id=${event.subscription_id} ` +
+        `doesn't match the one we registered`,
+    );
+    return c.json({ received: true });
+  }
 
   // Deauthorization: athlete revoked our access.
   if (
@@ -142,4 +160,35 @@ async function handleActivityEvent(event: StravaEvent): Promise<void> {
       `aspect=${event.aspect_type} inserted=${result.inserted}` +
       `${result.reason ? ` reason=${result.reason}` : ""}`,
   );
+}
+
+// Validate the event's subscription_id against the one we registered
+// with Strava during bootstrap. Cached after first DB hit because the
+// subscription_id is effectively immutable for the lifetime of the
+// service (it changes only when we re-run bootstrap with a new
+// callback URL, which is a deploy-time event).
+let cachedSubscriptionId: number | null = null;
+async function isExpectedSubscription(eventSubId: number): Promise<boolean> {
+  if (cachedSubscriptionId !== null) {
+    return eventSubId === cachedSubscriptionId;
+  }
+  const { getActiveSubscriptionRecord } = await import(
+    "../services/strava-subscriptions.js"
+  );
+  const record = await getActiveSubscriptionRecord();
+  if (!record) {
+    // No subscription configured yet → reject everything. Either we
+    // haven't run bootstrap, or someone deleted the row. Either way,
+    // refuse the event rather than guess.
+    return false;
+  }
+  cachedSubscriptionId = record.subscriptionId;
+  return eventSubId === cachedSubscriptionId;
+}
+
+// Test-only: reset the subscription cache so a freshly-seeded row
+// gets picked up on the next webhook call. Production code never
+// calls this.
+export function _resetSubscriptionCache(): void {
+  cachedSubscriptionId = null;
 }

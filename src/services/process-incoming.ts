@@ -27,6 +27,14 @@ import { bindReply } from "./binder.js";
 import { detectFlags } from "./flag-detector.js";
 import { autoTransitionStaleBlocks } from "../memory/summarize.js";
 import { ingestFileFromMediaUrl } from "../ingest/file.js";
+import {
+  CONSENT_ACCEPTED_REPLY,
+  CONSENT_AMBIGUOUS_REPLY,
+  CONSENT_DECLINED_REPLY,
+  PRIVACY_NOTICE,
+  classifyConsentReply,
+  recordConsentGranted,
+} from "./consent.js";
 import type { DecisionFrame } from "../router/types.js";
 import { archiveAthlete, isDormant, touchLastSeen } from "./dormancy.js";
 import {
@@ -64,6 +72,7 @@ export async function processIncomingMessage(
         phone: athletes.phone,
         athleticHistory: athletes.athleticHistory,
         lastSeenAt: athletes.lastSeenAt,
+        consentGrantedAt: athletes.consentGrantedAt,
       })
       .from(athletes)
       .where(eq(athletes.id, athleteId))
@@ -132,6 +141,52 @@ export async function processIncomingMessage(
     sendWhatsApp(phone, DELETION_SUCCESS_MESSAGE).catch((err) =>
       console.error("erasure: goodbye send failed", err),
     );
+    return;
+  }
+
+  // ── Consent gate (GDPR Article 6) ────────────────────────────────────
+  // We cannot legally process a runner's data without explicit informed
+  // consent. The very first inbound creates the athlete row (so we can
+  // send a reply), but coaching content is gated behind a "YES" reply
+  // to the privacy notice. State machine:
+  //
+  //   consent_granted_at = NULL + last outbound != PRIVACY_NOTICE
+  //     → send the notice, return. Subsequent inbound has the notice
+  //       as last outbound, so the next branch fires.
+  //
+  //   consent_granted_at = NULL + last outbound == PRIVACY_NOTICE
+  //     → classify the reply.
+  //       "yes"-like → set consent_granted_at, fall through to the
+  //         normal flow (which will kick off onboarding).
+  //       "stop"-like → archive the athlete + send a respectful close.
+  //       ambiguous → re-send the notice.
+  //
+  // Placed AFTER deletion confirmation so a pre-consent runner can
+  // still complete a delete-confirm flow (rare but possible if they
+  // typed YES DELETE before any privacy notice ever shipped).
+  if (!athleteRow.consentGrantedAt) {
+    if (lastOutboundBody === PRIVACY_NOTICE) {
+      const decision = classifyConsentReply(body);
+      if (decision === "decline") {
+        const phone = athleteRow.phone;
+        await archiveAthlete(athleteId);
+        sendWhatsApp(phone, CONSENT_DECLINED_REPLY).catch((err) =>
+          console.error("consent: declined-reply send failed", err),
+        );
+        return;
+      }
+      if (decision === "ambiguous") {
+        await sendAndPersist(athleteId, athleteRow.phone, CONSENT_AMBIGUOUS_REPLY);
+        return;
+      }
+      // accept: persist consent, send the warm-handoff. The next
+      // inbound from the runner triggers onboarding.
+      await recordConsentGranted(athleteId);
+      await sendAndPersist(athleteId, athleteRow.phone, CONSENT_ACCEPTED_REPLY);
+      return;
+    }
+    // First-touch case: no prior notice. Ship it and exit.
+    await sendAndPersist(athleteId, athleteRow.phone, PRIVACY_NOTICE);
     return;
   }
 

@@ -74,6 +74,12 @@ export const athletes = pgTable(
     // row is preserved (audit) but its phone is no longer matched on
     // inbound lookups, so the next message creates a fresh athlete.
     archivedAt: timestamp("archived_at", { withTimezone: true }),
+    // GDPR Article 6 lawful basis — populated when the runner explicitly
+    // accepts the privacy notice during onboarding ("YES" reply). NULL
+    // means the athlete is pre-consent; no coaching content is shown
+    // until this is set. Used as the "have we asked yet?" gate by
+    // src/services/consent.ts.
+    consentGrantedAt: timestamp("consent_granted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

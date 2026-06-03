@@ -1,0 +1,1 @@
+ALTER TABLE "athletes" ADD COLUMN "consent_granted_at" timestamp with time zone;
