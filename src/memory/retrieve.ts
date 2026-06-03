@@ -20,6 +20,11 @@ const RECENT_MESSAGE_LIMIT = 20;
 // who train less frequently get a longer time window naturally.
 const RECENT_ACTIVITY_LIMIT = 14;
 
+// T8: how many past completed-block summaries to surface. 3 covers a
+// typical year of training (one peak race per half-year, plus a tune-up)
+// without ballooning the prompt — each summary is ~200-300 words.
+const PAST_BLOCK_SUMMARY_LIMIT = 3;
+
 // Whether Strava is currently wired up for this athlete. Surfaced so the
 // LLM can ground its replies — without this, an athlete who's connected
 // but has no synced activities yet gets told "Strava isn't connected"
@@ -35,6 +40,8 @@ export type MemoryContext = {
   activeFlagCount: number;
   recentMessageCount: number;
   recentActivityCount: number;
+  // T8: how many past-block narrative summaries are surfaced in `text`.
+  pastBlockSummaryCount: number;
   stravaStatus: StravaStatus;
 };
 
@@ -68,6 +75,7 @@ export async function getMemoryContext(
       activeFlagCount: 0,
       recentMessageCount: 0,
       recentActivityCount: 0,
+      pastBlockSummaryCount: 0,
       stravaStatus: "not_connected",
     };
   }
@@ -93,6 +101,30 @@ export async function getMemoryContext(
     .orderBy(desc(raceBlocks.createdAt))
     .limit(1);
   const block = blockRows[0];
+
+  // T8: past completed blocks with a narrative summary. This is MARP's
+  // long-term memory — it survives across blocks so the next-cycle
+  // self can say "your IT band acted up in the last 3 weeks of build
+  // last time". Cap at 3 most-recent — older context fades naturally.
+  const pastSummaryRows = await db
+    .select({
+      raceName: raceBlocks.raceName,
+      raceDate: raceBlocks.raceDate,
+      raceDistance: raceBlocks.raceDistance,
+      summary: raceBlocks.summary,
+    })
+    .from(raceBlocks)
+    .where(
+      and(
+        eq(raceBlocks.athleteId, athleteId),
+        eq(raceBlocks.state, "completed"),
+      ),
+    )
+    .orderBy(desc(raceBlocks.raceDate))
+    .limit(PAST_BLOCK_SUMMARY_LIMIT);
+  const pastBlocks = pastSummaryRows.filter(
+    (r): r is typeof r & { summary: string } => r.summary !== null,
+  );
 
   // Last N messages, then reverse so the LLM sees oldest→newest in the
   // prompt — that ordering reads more naturally than "here are the last
@@ -147,6 +179,7 @@ export async function getMemoryContext(
       athleticHistory: athlete.athleticHistory,
       flags: flagRows,
       block,
+      pastBlocks,
       messages: recentChrono,
       activities: activityRows,
       stravaStatus,
@@ -155,6 +188,7 @@ export async function getMemoryContext(
     activeFlagCount: flagRows.length,
     recentMessageCount: recentChrono.length,
     recentActivityCount: activityRows.length,
+    pastBlockSummaryCount: pastBlocks.length,
     stravaStatus,
   };
 }
@@ -184,6 +218,13 @@ type FormatInput = {
         goalFinishTime: string | null;
       }
     | undefined;
+  // T8: past completed-block narrative summaries, newest race_date first.
+  pastBlocks?: Array<{
+    raceName: string;
+    raceDate: Date;
+    raceDistance: string;
+    summary: string;
+  }>;
   messages: Array<{
     direction: "in" | "out";
     body: string;
@@ -281,6 +322,20 @@ export function formatContext(input: FormatInput): string {
       .map((f) => `  - ${f.kind}: ${f.body} (since ${f.startedAt.toISOString().slice(0, 10)})`)
       .join("\n");
     parts.push(`Active flags:\n${flagLines}`);
+  }
+
+  // T8: past-block summaries — MARP's long-term memory. Each summary is
+  // a couple paragraphs of free text. Render newest race first so older
+  // context recedes naturally.
+  if (input.pastBlocks && input.pastBlocks.length > 0) {
+    const blockChunks = input.pastBlocks.map((b) => {
+      const date = b.raceDate.toISOString().slice(0, 10);
+      return `  [${date}] ${b.raceName} (${b.raceDistance}):\n${b.summary
+        .split("\n")
+        .map((line) => `    ${line}`)
+        .join("\n")}`;
+    });
+    parts.push(`Past blocks (newest first):\n${blockChunks.join("\n\n")}`);
   }
 
   if (input.activities && input.activities.length > 0) {

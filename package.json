@@ -13,7 +13,8 @@
     "db:seed": "bun run src/db/seed.ts",
     "db:studio": "drizzle-kit studio",
     "strava:bootstrap": "bun run src/scripts/bootstrap-strava-webhook.ts",
-    "admin:delete-athlete": "bun run src/scripts/admin-delete-athlete.ts"
+    "admin:delete-athlete": "bun run src/scripts/admin-delete-athlete.ts",
+    "admin:summarize-block": "bun run src/scripts/admin-summarize-block.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.97.1",

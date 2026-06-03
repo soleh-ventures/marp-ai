@@ -21,7 +21,8 @@ beforeEach(async () => {
   await db.execute(sql`
     TRUNCATE TABLE
       llm_calls, processed_messages, messages, active_flags,
-      activities, race_blocks, strava_connections, athletes
+      activities, race_blocks, strava_connections,
+      pending_decisions, athletes
     RESTART IDENTITY CASCADE
   `);
 });
@@ -33,7 +34,68 @@ describe("getMemoryContext", () => {
     expect(ctx.athleteName).toBeNull();
     expect(ctx.activeFlagCount).toBe(0);
     expect(ctx.recentMessageCount).toBe(0);
+    expect(ctx.pastBlockSummaryCount).toBe(0);
     expect(ctx.stravaStatus).toBe("not_connected");
+  });
+
+  test("T8: surfaces past-block summaries newest-first, capped at 3", async () => {
+    const [a] = await db
+      .insert(athletes)
+      .values({ phone: "+15551110900", name: "Veteran" })
+      .returning();
+    if (!a) throw new Error("insert failed");
+    // Four completed blocks with summaries — should cap to 3 most-recent.
+    const dates = ["2024-04-01", "2025-04-01", "2025-10-01", "2026-04-01"];
+    for (const d of dates) {
+      await db.insert(raceBlocks).values({
+        athleteId: a.id,
+        raceName: `Race ${d}`,
+        raceDate: new Date(`${d}T00:00:00Z`),
+        raceDistance: "marathon",
+        state: "completed",
+        summary: `Narrative for ${d}: stayed consistent, hit the goal.`,
+      });
+    }
+    // One completed block with NO summary — should be excluded.
+    await db.insert(raceBlocks).values({
+      athleteId: a.id,
+      raceName: "Unsummarized",
+      raceDate: new Date("2023-01-01"),
+      raceDistance: "10k",
+      state: "completed",
+    });
+    const ctx = await getMemoryContext(a.id);
+    expect(ctx.pastBlockSummaryCount).toBe(3);
+    expect(ctx.text).toContain("Past blocks");
+    // Newest 3 are 2025-04, 2025-10, 2026-04 — oldest (2024) excluded.
+    expect(ctx.text).toContain("2026-04-01");
+    expect(ctx.text).toContain("2025-10-01");
+    expect(ctx.text).toContain("2025-04-01");
+    expect(ctx.text).not.toContain("2024-04-01");
+    expect(ctx.text).not.toContain("Unsummarized");
+    // Newest renders first.
+    const idx26 = ctx.text.indexOf("2026-04-01");
+    const idx25 = ctx.text.indexOf("2025-04-01");
+    expect(idx26).toBeLessThan(idx25);
+  });
+
+  test("T8: no Past blocks section when no completed blocks have summaries", async () => {
+    const [a] = await db
+      .insert(athletes)
+      .values({ phone: "+15551110901", name: "Fresh" })
+      .returning();
+    if (!a) throw new Error("insert failed");
+    // Active block with no summary.
+    await db.insert(raceBlocks).values({
+      athleteId: a.id,
+      raceName: "Upcoming",
+      raceDate: new Date(Date.now() + 60 * 86400_000),
+      raceDistance: "marathon",
+      state: "active",
+    });
+    const ctx = await getMemoryContext(a.id);
+    expect(ctx.pastBlockSummaryCount).toBe(0);
+    expect(ctx.text).not.toContain("Past blocks");
   });
 
   test("known athlete with no flags / no messages renders just the profile", async () => {
