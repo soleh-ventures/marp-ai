@@ -220,7 +220,7 @@ describe("POST /webhooks/twilio/whatsapp — pre-routing batch", () => {
     // MARP just asked a forked question, now the runner replies.
     const [a] = await db
       .insert(athletes)
-      .values({ phone: "+15559990001" })
+      .values({ phone: "+15559990001", consentGrantedAt: new Date() })
       .returning();
     if (!a) throw new Error("seed athlete failed");
     const [out] = await db
@@ -295,6 +295,14 @@ describe("POST /webhooks/twilio/whatsapp — pre-routing batch", () => {
       },
     ]);
 
+    // Pre-seed an athlete with consent already granted so the webhook's
+    // findOrCreate finds an existing row and the consent gate skips
+    // straight to the pre-routing batch. Without this, the very first
+    // message would just trigger the privacy notice.
+    await db
+      .insert(athletes)
+      .values({ phone: "+15559990002", consentGrantedAt: new Date() });
+
     const res = await app.fetch(
       makeSignedRequest({
         MessageSid: "SM_flag_1",
@@ -329,7 +337,7 @@ describe("POST /webhooks/twilio/whatsapp — pre-routing batch", () => {
     // for the state transition. Short poll bounded at 5 s.
     const [a] = await db
       .insert(athletes)
-      .values({ phone: "+15559990003" })
+      .values({ phone: "+15559990003", consentGrantedAt: new Date() })
       .returning();
     if (!a) throw new Error("seed athlete failed");
     const [block] = await db
