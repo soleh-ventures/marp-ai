@@ -53,6 +53,11 @@ export class MockProvider implements LlmProvider {
       text: match.text,
       tokensIn,
       tokensOut,
+      // Mock provider doesn't simulate caching — T6's cache_hit telemetry
+      // is verified end-to-end via a small unit test that pre-builds the
+      // expected LlmResponse shape rather than the mock provider chain.
+      cacheReadTokens: 0,
+      cacheCreateTokens: 0,
       latencyMs: match.latencyMs ?? 1,
       cacheHit: false,
     };

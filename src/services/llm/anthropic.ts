@@ -42,20 +42,21 @@ export class AnthropicProvider implements LlmProvider {
       .join("");
 
     const usage = res.usage;
-    const cacheHit =
-      (usage.cache_read_input_tokens ?? 0) >
-      (usage.cache_creation_input_tokens ?? 0);
+    const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
+    const cacheCreateTokens = usage.cache_creation_input_tokens ?? 0;
+    // Anthropic's `input_tokens` excludes both cache_read and
+    // cache_creation from the headline figure. Sum them all back for
+    // a "total input volume" view; pricing.ts splits them back out
+    // for cost math.
+    const tokensIn = usage.input_tokens + cacheReadTokens + cacheCreateTokens;
+    const cacheHit = cacheReadTokens > cacheCreateTokens;
 
     return {
       text,
-      // input_tokens excludes cached tokens in the response, but we want
-      // total input volume for cost math. Add cache_read back in — those
-      // are still billed (at 10%).
-      tokensIn:
-        usage.input_tokens +
-        (usage.cache_read_input_tokens ?? 0) +
-        (usage.cache_creation_input_tokens ?? 0),
+      tokensIn,
       tokensOut: usage.output_tokens,
+      cacheReadTokens,
+      cacheCreateTokens,
       latencyMs,
       cacheHit,
     };

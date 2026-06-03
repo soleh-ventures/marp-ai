@@ -43,6 +43,13 @@
       "when": 1780240675820,
       "tag": "0005_rich_black_bolt",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1780467222019,
+      "tag": "0006_steady_nick_fury",
+      "breakpoints": true
     }
   ]
 }
