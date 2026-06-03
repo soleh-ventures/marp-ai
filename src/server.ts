@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { config } from "./config.js";
 import { ping } from "./db/client.js";
+import { rateLimit } from "./middleware/rate-limit.js";
 import { validateAllPrompts } from "./router/prompts.js";
 import { twilioWebhook } from "./webhooks/twilio.js";
 import { stravaWebhook } from "./webhooks/strava.js";
@@ -17,6 +18,13 @@ app.get("/", (c) => c.text("marp-ai"));
 
 app.route("/webhooks/twilio", twilioWebhook);
 app.route("/webhooks/strava", stravaWebhook);
+
+// ET10 — rate-limit the magic-link entry point. The runner only ever
+// opens their link once; 5 req/min/IP is generous for retries on flaky
+// mobile networks while making token enumeration uninteresting. The
+// middleware must be registered BEFORE the route mount so it runs
+// first in the matched chain.
+app.use("/auth/strava/*", rateLimit({ windowMs: 60_000, limit: 5 }));
 app.route("/auth/strava", stravaAuth);
 
 app.get("/health", async (c) => {
