@@ -79,6 +79,8 @@ twilioWebhook.post("/whatsapp", async (c) => {
 
   const numMedia = Number(params.NumMedia ?? "0");
   const mediaUrl = numMedia > 0 ? (params.MediaUrl0 ?? null) : null;
+  const mediaContentType =
+    numMedia > 0 ? (params.MediaContentType0 ?? null) : null;
 
   const [inserted] = await db
     .insert(messages)
@@ -99,7 +101,13 @@ twilioWebhook.post("/whatsapp", async (c) => {
   // routing can be ~25s — synchronous reply isn't an option. Errors are
   // logged; the runner just doesn't see a reply, which is recoverable
   // (they'll re-engage, we'll see it in the log).
-  const task = processIncomingMessage(athlete.id, inserted.id, bodyText)
+  const task = processIncomingMessage(
+    athlete.id,
+    inserted.id,
+    bodyText,
+    mediaUrl,
+    mediaContentType,
+  )
     .catch((err) => {
       console.error("processIncoming failed:", err);
     })

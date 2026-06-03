@@ -26,6 +26,7 @@ import { recordFrame } from "./pending-decisions.js";
 import { bindReply } from "./binder.js";
 import { detectFlags } from "./flag-detector.js";
 import { autoTransitionStaleBlocks } from "../memory/summarize.js";
+import { ingestFileFromMediaUrl } from "../ingest/file.js";
 import type { DecisionFrame } from "../router/types.js";
 import { archiveAthlete, isDormant, touchLastSeen } from "./dormancy.js";
 import {
@@ -48,6 +49,12 @@ export async function processIncomingMessage(
   athleteId: string,
   messageId: string,
   body: string,
+  // ET15: when the inbound carried a media attachment (Twilio MediaUrl0),
+  // the webhook passes it through. Today only fitness files (GPX) get
+  // ingested; everything else falls through to the regular routing
+  // branch with the media silently ignored.
+  mediaUrl?: string | null,
+  mediaContentType?: string | null,
 ): Promise<void> {
   // Pull phone + athletic_history in one query — we need both regardless
   // of which branch we take.
@@ -142,6 +149,27 @@ export async function processIncomingMessage(
   // fresh timestamp. Done before routing so even a slow LLM call won't
   // drift this.
   await touchLastSeen(athleteId);
+
+  // ── File ingest (ET15) ───────────────────────────────────────────────
+  // If the runner attached a fitness file (GPX today; FIT/TCX get a
+  // friendly reject), short-circuit the LLM router. The file becomes
+  // an activity row and the reply is a confirmation summarising what
+  // we extracted. Subsequent training questions can reference it via
+  // memory context on the next turn.
+  if (mediaUrl) {
+    const reply = await handleFileUpload(
+      athleteId,
+      mediaUrl,
+      mediaContentType ?? undefined,
+    );
+    if (reply !== null) {
+      await sendAndPersist(athleteId, athleteRow.phone, reply);
+      return;
+    }
+    // null reply = not a recognised fitness file. Fall through to the
+    // normal routing branches so an attached image / voice note doesn't
+    // get treated as a silent failure.
+  }
 
   // ── Binder (ET7) + Flag detection (T11) ─────────────────────────────
   // Both writes happen BEFORE the routing branch so the routing call's
@@ -247,6 +275,63 @@ export async function processIncomingMessage(
 // the normal routing branch — they need the outbound persisted too so
 // the next inbound's "lastOutbound" check works.
 //
+// Try to ingest a fitness file from the runner's MediaUrl0. Returns:
+//   - A confirmation reply string when the ingest succeeded
+//   - A friendly explanation when the format is recognised-but-rejected
+//     (FIT / TCX) or the parse failed
+//   - null when the media wasn't a recognised fitness file at all
+//     (image, voice note, etc.) — caller falls through to normal routing
+async function handleFileUpload(
+  athleteId: string,
+  mediaUrl: string,
+  contentType: string | undefined,
+): Promise<string | null> {
+  const result = await ingestFileFromMediaUrl(athleteId, mediaUrl, contentType);
+  if (result.ok) {
+    const km = (result.distanceM / 1000).toFixed(2);
+    const dur = formatDurationHuman(result.durationS);
+    const tail = result.inserted
+      ? ""
+      : " (already in your log — no double-counting)";
+    const namePart = result.name ? ` "${result.name}"` : "";
+    return `Got it. Logged a ${km}km ${result.discipline}${namePart} (${dur}).${tail}`;
+  }
+  switch (result.reason) {
+    case "unsupported_format": {
+      if (result.detail === "fit" || result.detail === "tcx") {
+        return (
+          `I can read GPX files for now — ${result.detail!.toUpperCase()} parsing is coming, ` +
+          "but for now try exporting as GPX from your watch app and re-send."
+        );
+      }
+      // Unknown / not a fitness file — let the normal routing branch
+      // handle it. The runner may have sent an image or voice note.
+      return null;
+    }
+    case "download_failed":
+      return "Couldn't download that file. Try sending it again?";
+    case "download_too_large":
+      return "That file is too big for me (5 MB cap). Trim it or send a summary instead?";
+    case "parse_failed":
+      return (
+        "I downloaded the file but couldn't make sense of it. Make sure it's a " +
+        "valid GPX export — some apps wrap multiple sessions in one file, which " +
+        "I don't handle yet."
+      );
+    case "missing_credentials":
+      // Operator-side problem, not the runner's. Stay quiet rather than
+      // exposing the configuration gap; the file just won't ingest.
+      return null;
+  }
+}
+
+function formatDurationHuman(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h > 0) return `${h}h${m.toString().padStart(2, "0")}`;
+  return `${m}min`;
+}
+
 // Returns the inserted outbound message_id so the caller can wire it
 // into related rows (pending_decisions back-pointer for ET6). When the
 // Twilio send fails, outboundMessageId is null and the inbound message
