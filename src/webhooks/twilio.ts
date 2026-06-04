@@ -5,8 +5,6 @@ import { messages } from "../db/schema.js";
 import { findOrCreateByPhone } from "../services/athletes.js";
 import { claimMessage } from "../services/idempotency.js";
 import { processIncomingMessage } from "../services/process-incoming.js";
-import { ACK_DELAY_MS, pickThinkingAck } from "../services/thinking-ack.js";
-import { sendWhatsApp } from "../services/twilio-send.js";
 import { verifySignature } from "../services/twilio-signature.js";
 
 export const twilioWebhook = new Hono();
@@ -103,21 +101,11 @@ twilioWebhook.post("/whatsapp", async (c) => {
   // routing can be ~25s — synchronous reply isn't an option. Errors are
   // logged; the runner just doesn't see a reply, which is recoverable
   // (they'll re-engage, we'll see it in the log).
-  // T13 — schedule a "thinking" ack that fires only if the router
-  // takes longer than ACK_DELAY_MS. If processIncoming completes
-  // first, the timer is cleared in the .finally below and the runner
-  // gets one reply (the real one). If the router takes longer, the
-  // runner sees a short MARP-voice line so they know we're alive.
   //
-  // The ack is fire-and-forget via sendWhatsApp directly — we
-  // deliberately don't persist it to the messages table. It's an
-  // operational nudge, not part of the conversation memory.
-  const ackTimer = setTimeout(() => {
-    sendWhatsApp(athlete.phone, pickThinkingAck()).catch((err) =>
-      console.error("thinking-ack send failed:", err),
-    );
-  }, ACK_DELAY_MS);
-
+  // The "thinking…" ack now fires from process-incoming's LLM-bound
+  // branches (V1, v1.1 flow redesign) — immediate rather than 5s timer,
+  // and suppressed on fast paths (consent / dormancy / file-ingest /
+  // Strava-connect / deletion) where the reply lands quickly.
   const task = processIncomingMessage(
     athlete.id,
     inserted.id,
@@ -129,7 +117,6 @@ twilioWebhook.post("/whatsapp", async (c) => {
       console.error("processIncoming failed:", err);
     })
     .finally(() => {
-      clearTimeout(ackTimer);
       inFlight.delete(task);
     });
   inFlight.add(task);

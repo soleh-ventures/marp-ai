@@ -9,6 +9,7 @@ import {
 import { getMemoryContext } from "../memory/retrieve.js";
 import { route } from "../router/index.js";
 import { sendWhatsApp, TwilioSendError } from "./twilio-send.js";
+import { fireThinkingAck } from "./thinking-ack.js";
 import {
   buildConnectReply,
   buildOnboardingStravaOffer,
@@ -268,6 +269,9 @@ export async function processIncomingMessage(
   } else if (!isOnboarded(history)) {
     // Onboarding branch. The flow persists the updated athletic_history
     // itself; we just take the reply.
+    // V1: fire "thinking…" immediately — onboarding LLM round-trip is
+    // typically 2-4s, long enough for silence to feel ambiguous.
+    fireThinkingAck(athleteRow.phone);
     const onboardingResult = await runOnboardingTurn(
       athleteId,
       messageId,
@@ -288,6 +292,9 @@ export async function processIncomingMessage(
     replyText = buildConnectReply(status);
   } else {
     // Normal expert routing branch.
+    // V1: fire "thinking…" immediately — multi-domain routing can take
+    // 10-25s, so the runner needs a signal that MARP received the message.
+    fireThinkingAck(athleteRow.phone);
     const memory = await getMemoryContext(athleteId);
     const result = await route({
       message: body,
