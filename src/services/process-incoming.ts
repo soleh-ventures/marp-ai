@@ -29,10 +29,10 @@ import { detectFlags } from "./flag-detector.js";
 import { autoTransitionStaleBlocks } from "../memory/summarize.js";
 import { ingestFileFromMediaUrl } from "../ingest/file.js";
 import {
-  CONSENT_ACCEPTED_REPLY,
   CONSENT_AMBIGUOUS_REPLY,
   CONSENT_DECLINED_REPLY,
   PRIVACY_NOTICE,
+  buildConsentAcceptedReply,
   classifyConsentReply,
   recordConsentGranted,
 } from "./consent.js";
@@ -182,8 +182,12 @@ export async function processIncomingMessage(
       }
       // accept: persist consent, send the warm-handoff. The next
       // inbound from the runner triggers onboarding.
+      // V2: handoff bundles the Strava-first connect offer. Runner
+      // can tap the link (then onboarding picks up after) or just
+      // reply with their name/goal to skip Strava.
       await recordConsentGranted(athleteId);
-      await sendAndPersist(athleteId, athleteRow.phone, CONSENT_ACCEPTED_REPLY);
+      const acceptedReply = await buildConsentAcceptedReply(athleteId);
+      await sendAndPersist(athleteId, athleteRow.phone, acceptedReply);
       return;
     }
     // First-touch case: no prior notice. Ship it and exit.

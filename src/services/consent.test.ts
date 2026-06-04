@@ -4,8 +4,8 @@ import { db } from "../db/client.js";
 import { assertNotProductionDb } from "../db/test-guard.js";
 import { athletes } from "../db/schema.js";
 import {
+  buildConsentAcceptedReply,
   classifyConsentReply,
-  CONSENT_ACCEPTED_REPLY,
   CONSENT_AMBIGUOUS_REPLY,
   CONSENT_DECLINED_REPLY,
   PRIVACY_NOTICE,
@@ -52,10 +52,19 @@ describe("privacy copy", () => {
     expect(PRIVACY_NOTICE.toLowerCase()).toContain("sold");
   });
 
-  test("accepted reply bridges to onboarding (doesn't leave runner hanging)", () => {
-    // If consent acceptance returns nothing actionable, the runner
-    // waits forever expecting a question.
-    expect(CONSENT_ACCEPTED_REPLY).toMatch(/\?$|\?\s/);
+  test("accepted reply bridges to something actionable (Strava link OR onboarding question)", async () => {
+    // V2 (Strava-first): either path leaves the runner with a concrete
+    // next action — tap a link, or answer the onboarding question.
+    // Whichever path runs, the reply must end with either a magic link
+    // or a question mark. NEVER leave the runner with no next step.
+    const [a] = await db
+      .insert(athletes)
+      .values({ phone: "+15551110701" })
+      .returning();
+    if (!a) throw new Error("insert failed");
+    const reply = await buildConsentAcceptedReply(a.id);
+    expect(reply.length).toBeGreaterThan(0);
+    expect(reply).toMatch(/\?/);
   });
 
   test("declined reply confirms data won't be stored", () => {
