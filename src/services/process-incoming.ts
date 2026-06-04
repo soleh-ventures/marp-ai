@@ -23,6 +23,17 @@ import { ingestPlan } from "./plan/ingest.js";
 import { saveAthletePlan } from "./plan/storage.js";
 import { renderPlanSummary } from "./plan/types.js";
 import {
+  DECLINED_PREFS,
+  REMINDER_AMBIGUOUS_REPLY,
+  REMINDER_CAPTURED_REPLY,
+  REMINDER_DECLINED_REPLY,
+  REMINDER_PROMPT,
+  REMINDER_PROMPT_SIGNATURE,
+  classifyPrefsReply,
+  isPrefsAsked,
+} from "./reminders/prefs.js";
+import { inferTimezoneFromPhone } from "./reminders/timezone.js";
+import {
   buildConnectReply,
   buildOnboardingStravaOffer,
   getStravaConnectStatus,
@@ -86,6 +97,7 @@ export async function processIncomingMessage(
         athleticHistory: athletes.athleticHistory,
         lastSeenAt: athletes.lastSeenAt,
         consentGrantedAt: athletes.consentGrantedAt,
+        reminderPrefs: athletes.reminderPrefs,
       })
       .from(athletes)
       .where(eq(athletes.id, athleteId))
@@ -314,6 +326,31 @@ export async function processIncomingMessage(
         .set({ athleticHistory: updatedHistory })
         .where(eq(athletes.id, athleteId));
     }
+  } else if (
+    !isPrefsAsked(athleteRow.reminderPrefs) &&
+    lastOutboundBody !== null &&
+    lastOutboundBody.includes(REMINDER_PROMPT_SIGNATURE)
+  ) {
+    // V8: runner is responding to the reminder pref prompt.
+    // We're past the pivot (plan is saved); just classify and persist.
+    const result = classifyPrefsReply(body);
+    if (result.kind === "decline") {
+      await db
+        .update(athletes)
+        .set({ reminderPrefs: DECLINED_PREFS })
+        .where(eq(athletes.id, athleteId));
+      replyText = REMINDER_DECLINED_REPLY;
+    } else if (result.kind === "time_specified") {
+      await db
+        .update(athletes)
+        .set({
+          reminderPrefs: { enabled: true, time_local: result.time_local },
+        })
+        .where(eq(athletes.id, athleteId));
+      replyText = REMINDER_CAPTURED_REPLY(result.time_local);
+    } else {
+      replyText = REMINDER_AMBIGUOUS_REPLY;
+    }
   } else if (getPivotState(history) === "awaiting_plan") {
     // V6: runner is in the BYO branch — anything they send next is
     // treated as the pasted plan. Parse via LLM ingest, save, and
@@ -324,11 +361,15 @@ export async function processIncomingMessage(
     if (result.ok) {
       await saveAthletePlan(athleteId, result.plan);
       const updatedHistory = withPivotState(history, "done");
+      const tz = inferTimezoneFromPhone(athleteRow.phone);
       await db
         .update(athletes)
-        .set({ athleticHistory: updatedHistory })
+        .set({
+          athleticHistory: updatedHistory,
+          ...(tz ? { timezone: tz } : {}),
+        })
         .where(eq(athletes.id, athleteId));
-      replyText = renderPlanSummary(result.plan);
+      replyText = renderPlanSummary(result.plan) + REMINDER_PROMPT;
     } else if (result.reason === "not_a_plan") {
       replyText =
         "That didn't look like a training plan to me — looked more like a " +
@@ -360,11 +401,15 @@ export async function processIncomingMessage(
         const plan = await generatePlan({ athleteId, messageId });
         await saveAthletePlan(athleteId, plan);
         const updatedHistory = withPivotState(history, "done");
+        const tz = inferTimezoneFromPhone(athleteRow.phone);
         await db
           .update(athletes)
-          .set({ athleticHistory: updatedHistory })
+          .set({
+            athleticHistory: updatedHistory,
+            ...(tz ? { timezone: tz } : {}),
+          })
           .where(eq(athletes.id, athleteId));
-        replyText = renderPlanSummary(plan);
+        replyText = renderPlanSummary(plan) + REMINDER_PROMPT;
       } catch (err) {
         console.error("plan-generator failed:", (err as Error).message);
         replyText =

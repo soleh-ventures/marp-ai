@@ -239,7 +239,7 @@ export function renderPlanSummary(plan: Plan): string {
   }
 
   lines.push("");
-  lines.push("Look right? Reply YES to lock it in, or tell me what to change.");
+  lines.push("Look right? If anything's off, just tell me what to change.");
 
   return lines.join("\n");
 }

@@ -7,6 +7,7 @@ import { validateAllPrompts } from "./router/prompts.js";
 import { twilioWebhook } from "./webhooks/twilio.js";
 import { stravaWebhook } from "./webhooks/strava.js";
 import { stravaAuth } from "./routes/strava-auth.js";
+import { cronReminders } from "./routes/cron-reminders.js";
 
 // Fail loud at boot if any prompt file is missing or unparseable. Better
 // than discovering it when the first runner texts MARP.
@@ -26,6 +27,10 @@ app.route("/webhooks/strava", stravaWebhook);
 // first in the matched chain.
 app.use("/auth/strava/*", rateLimit({ windowMs: 60_000, limit: 5 }));
 app.route("/auth/strava", stravaAuth);
+
+// V8 — reminder cron. Hit by Railway scheduler every 15 min with
+// X-Cron-Secret header. Returns dispatch stats as JSON.
+app.route("/internal/cron", cronReminders);
 
 app.get("/health", async (c) => {
   const dbOk = await ping();

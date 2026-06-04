@@ -80,6 +80,19 @@ export const athletes = pgTable(
     // until this is set. Used as the "have we asked yet?" gate by
     // src/services/consent.ts.
     consentGrantedAt: timestamp("consent_granted_at", { withTimezone: true }),
+    // V8 (v1.1): IANA timezone string captured after plan generation
+    // (e.g., "Europe/Berlin"). Defaults inferred from the phone country
+    // code; runner can override via chat. NULL = no reminders possible
+    // (reminder cron skips silently to avoid wrong-time messages).
+    timezone: text("timezone"),
+    // V8: reminder preferences. JSON shape:
+    //   { enabled: boolean, time_local: "HH:MM" }
+    // enabled=false → opt-out (no reminders). When enabled=true, the
+    // cron sends one reminder per training day at time_local in the
+    // athlete's timezone. Defaulting to NULL ("not asked yet") lets the
+    // capture flow know to prompt; an explicit {enabled:false} object
+    // means the runner declined.
+    reminderPrefs: jsonb("reminder_prefs"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

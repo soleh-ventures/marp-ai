@@ -127,10 +127,10 @@ describe("renderPlanSummary", () => {
     expect(summary).toContain("Peak week");
   });
 
-  test("ends with a commit prompt so the runner knows the next step", () => {
+  test("ends with a 'tell me what to change' nudge so the runner knows they can revise", () => {
     const plan = parsePlan(validPlan);
     const summary = renderPlanSummary(plan);
-    expect(summary).toMatch(/lock it in|change/);
+    expect(summary).toMatch(/change/);
   });
 
   test("omits race name line when not provided", () => {
