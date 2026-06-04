@@ -11,6 +11,14 @@ import { route } from "../router/index.js";
 import { sendWhatsApp, TwilioSendError } from "./twilio-send.js";
 import { fireThinkingAck } from "./thinking-ack.js";
 import {
+  PIVOT_QUESTION,
+  PIVOT_REPLY_BUILD,
+  PIVOT_REPLY_BYO,
+  classifyPivotReply,
+  isAwaitingPivotChoice,
+  withPivotState,
+} from "./post-onboarding-pivot.js";
+import {
   buildConnectReply,
   buildOnboardingStravaOffer,
   getStravaConnectStatus,
@@ -283,11 +291,58 @@ export async function processIncomingMessage(
     );
     replyText = onboardingResult.reply;
 
-    // When onboarding wraps up this turn, append a Strava connect offer
-    // so the runner can link their account right away.
+    // When onboarding wraps up this turn:
+    //  1. Strava offer (if not connected) — second-chance prompt
+    //  2. V5: append the post-onboarding plan pivot — runners need a
+    //     concrete next step, not "ask me anything"
+    //  3. V5: persist pivot_state = "awaiting_choice" so the next
+    //     inbound is matched against the a/b classifier
     if (onboardingResult.finishedThisTurn) {
       const offer = await buildOnboardingStravaOffer(athleteId).catch(() => null);
       if (offer) replyText += offer;
+      replyText += PIVOT_QUESTION;
+      const updatedHistory = withPivotState(
+        onboardingResult.newHistory,
+        "awaiting_choice",
+      );
+      await db
+        .update(athletes)
+        .set({ athleticHistory: updatedHistory })
+        .where(eq(athletes.id, athleteId));
+    }
+  } else if (isAwaitingPivotChoice(lastOutboundBody, history)) {
+    // V5: runner is responding to the post-onboarding pivot.
+    // Classify a/b; on "other", fall through to the expert router so
+    // a free-form question never traps the runner inside the pivot.
+    const choice = classifyPivotReply(body);
+    if (choice === "byo") {
+      replyText = PIVOT_REPLY_BYO;
+      const updatedHistory = withPivotState(history, "awaiting_plan");
+      await db
+        .update(athletes)
+        .set({ athleticHistory: updatedHistory })
+        .where(eq(athletes.id, athleteId));
+    } else if (choice === "build") {
+      replyText = PIVOT_REPLY_BUILD;
+      const updatedHistory = withPivotState(history, "build_pending");
+      await db
+        .update(athletes)
+        .set({ athleticHistory: updatedHistory })
+        .where(eq(athletes.id, athleteId));
+    } else {
+      // Ambiguous reply — route to the expert. Don't auto-clear the
+      // pivot_state; the runner can still answer a/b on the next turn
+      // if they want to.
+      fireThinkingAck(athleteRow.phone);
+      const memory = await getMemoryContext(athleteId);
+      const result = await route({
+        message: body,
+        athleteId,
+        messageId,
+        contextSummary: memory.text,
+      });
+      replyText = result.finalText.trim();
+      routerFrame = result.frame;
     }
   } else if (looksLikeStravaConnect(body)) {
     // Explicit Strava connect intent — skip the expert router and reply
