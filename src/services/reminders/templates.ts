@@ -10,11 +10,30 @@
 
 import type { PlanSession } from "../plan/types.js";
 
-export function buildReminderText(name: string, session: PlanSession): string {
-  const headline = describeSession(session);
-  const why = session.reasoning ? `\n\nWhy: ${session.reasoning}` : "";
-  const lead = name && name !== "you" ? `Morning ${name} — ` : "Morning — ";
-  return `${lead}today's session:\n\n${headline}${why}`;
+export type BuildReminderInput = {
+  name: string;
+  session: PlanSession;
+  // V9: optional calendar links — included when caller built them. The
+  // scheduler builds these per-athlete using their reminder time_local
+  // and a freshly-signed cal token.
+  icsUrl?: string;
+  googleUrl?: string;
+};
+
+export function buildReminderText(input: BuildReminderInput): string {
+  const headline = describeSession(input.session);
+  const why = input.session.reasoning ? `\n\nWhy: ${input.session.reasoning}` : "";
+  const lead =
+    input.name && input.name !== "you"
+      ? `Morning ${input.name} — `
+      : "Morning — ";
+  let body = `${lead}today's session:\n\n${headline}${why}`;
+  if (input.icsUrl || input.googleUrl) {
+    body += "\n\nAdd to calendar:";
+    if (input.icsUrl) body += `\n${input.icsUrl}`;
+    if (input.googleUrl) body += `\n${input.googleUrl}`;
+  }
+  return body;
 }
 
 function describeSession(s: PlanSession): string {

@@ -28,6 +28,9 @@ import type { DayOfWeek, PlanSession } from "../plan/types.js";
 import { sendWhatsApp } from "../twilio-send.js";
 import { readPrefs } from "./prefs.js";
 import { buildReminderText } from "./templates.js";
+import { buildGoogleQuickAddUrl, buildIcsUrl } from "../cal/build.js";
+import { generateCalToken } from "../cal/token.js";
+import { config } from "../../config.js";
 
 export type SchedulerStats = {
   considered: number;
@@ -110,7 +113,30 @@ export async function runReminderScheduler(opts: {
       continue;
     }
 
-    const text = buildReminderText(c.name ?? "you", session);
+    // V9: build calendar links for today's session. Skip silently if
+    // the public base isn't configured (dev) — reminders still ship
+    // without the links.
+    const today = localTodayString(opts.now, c.timezone);
+    let icsUrl: string | undefined;
+    let googleUrl: string | undefined;
+    if (today && config.twilio.publicWebhookBase) {
+      try {
+        const token = generateCalToken(c.id, today);
+        icsUrl = buildIcsUrl(token);
+        googleUrl = buildGoogleQuickAddUrl(session, today, prefs.time_local);
+      } catch (err) {
+        console.error(
+          `reminder: cal link build failed for athlete ${c.id}: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    const text = buildReminderText({
+      name: c.name ?? "you",
+      session,
+      icsUrl,
+      googleUrl,
+    });
     try {
       await sendWhatsApp(c.phone, text);
       stats.sent++;
@@ -123,6 +149,22 @@ export async function runReminderScheduler(opts: {
   }
 
   return stats;
+}
+
+// Returns YYYY-MM-DD of "today" in the athlete's local timezone.
+function localTodayString(now: Date, timezone: string): string | null {
+  try {
+    const fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    // en-CA gives YYYY-MM-DD format
+    return fmt.format(now);
+  } catch {
+    return null;
+  }
 }
 
 // Returns true when the athlete's local "now" is within [time_local,
