@@ -12,12 +12,16 @@ import { sendWhatsApp, TwilioSendError } from "./twilio-send.js";
 import { fireThinkingAck } from "./thinking-ack.js";
 import {
   PIVOT_QUESTION,
-  PIVOT_REPLY_BUILD,
   PIVOT_REPLY_BYO,
   classifyPivotReply,
+  getPivotState,
   isAwaitingPivotChoice,
   withPivotState,
 } from "./post-onboarding-pivot.js";
+import { generatePlan } from "./plan/generator.js";
+import { ingestPlan } from "./plan/ingest.js";
+import { saveAthletePlan } from "./plan/storage.js";
+import { renderPlanSummary } from "./plan/types.js";
 import {
   buildConnectReply,
   buildOnboardingStravaOffer,
@@ -310,6 +314,32 @@ export async function processIncomingMessage(
         .set({ athleticHistory: updatedHistory })
         .where(eq(athletes.id, athleteId));
     }
+  } else if (getPivotState(history) === "awaiting_plan") {
+    // V6: runner is in the BYO branch — anything they send next is
+    // treated as the pasted plan. Parse via LLM ingest, save, and
+    // confirm. On parse failure, send a friendly clarification so
+    // the runner can retry.
+    fireThinkingAck(athleteRow.phone);
+    const result = await ingestPlan({ athleteId, messageId, pastedText: body });
+    if (result.ok) {
+      await saveAthletePlan(athleteId, result.plan);
+      const updatedHistory = withPivotState(history, "done");
+      await db
+        .update(athletes)
+        .set({ athleticHistory: updatedHistory })
+        .where(eq(athletes.id, athleteId));
+      replyText = renderPlanSummary(result.plan);
+    } else if (result.reason === "not_a_plan") {
+      replyText =
+        "That didn't look like a training plan to me — looked more like a " +
+        "general message. Paste the plan itself (week-by-week or a summary), " +
+        "or reply 'build it' if you'd rather I build one from scratch.";
+    } else {
+      replyText =
+        "I downloaded the plan but couldn't quite parse it. Try splitting it " +
+        "into clear week sections (Week 1, Week 2…) and resend? Or reply " +
+        "'build it' and I'll build one from scratch.";
+    }
   } else if (isAwaitingPivotChoice(lastOutboundBody, history)) {
     // V5: runner is responding to the post-onboarding pivot.
     // Classify a/b; on "other", fall through to the expert router so
@@ -323,12 +353,25 @@ export async function processIncomingMessage(
         .set({ athleticHistory: updatedHistory })
         .where(eq(athletes.id, athleteId));
     } else if (choice === "build") {
-      replyText = PIVOT_REPLY_BUILD;
-      const updatedHistory = withPivotState(history, "build_pending");
-      await db
-        .update(athletes)
-        .set({ athleticHistory: updatedHistory })
-        .where(eq(athletes.id, athleteId));
+      // V6: runner picked (b) — generate the plan in this same turn
+      // rather than asking them to send another "go" message.
+      fireThinkingAck(athleteRow.phone);
+      try {
+        const plan = await generatePlan({ athleteId, messageId });
+        await saveAthletePlan(athleteId, plan);
+        const updatedHistory = withPivotState(history, "done");
+        await db
+          .update(athletes)
+          .set({ athleticHistory: updatedHistory })
+          .where(eq(athletes.id, athleteId));
+        replyText = renderPlanSummary(plan);
+      } catch (err) {
+        console.error("plan-generator failed:", (err as Error).message);
+        replyText =
+          "Couldn't build the plan this turn — something went sideways on " +
+          "my side. Try again in a moment, or paste a plan you already have " +
+          "and I'll work from that.";
+      }
     } else {
       // Ambiguous reply — route to the expert. Don't auto-clear the
       // pivot_state; the runner can still answer a/b on the next turn
