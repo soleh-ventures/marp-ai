@@ -13,6 +13,42 @@ describe("REMINDER_PROMPT", () => {
   });
 });
 
+describe("classifyPrefsReply — timing (F7)", () => {
+  test("defaults to morning_of for a bare time", () => {
+    const r = classifyPrefsReply("6am");
+    expect(r.kind).toBe("time_specified");
+    if (r.kind === "time_specified") expect(r.timing).toBe("morning_of");
+  });
+
+  test("detects 'night before, 9pm' as night_before + 21:00", () => {
+    const r = classifyPrefsReply("night before, 9pm");
+    expect(r.kind).toBe("time_specified");
+    if (r.kind === "time_specified") {
+      expect(r.timing).toBe("night_before");
+      expect(r.time_local).toBe("21:00");
+    }
+  });
+
+  test("detects 'the evening before at 20:00'", () => {
+    const r = classifyPrefsReply("the evening before at 20:00");
+    expect(r.kind).toBe("time_specified");
+    if (r.kind === "time_specified") {
+      expect(r.timing).toBe("night_before");
+      expect(r.time_local).toBe("20:00");
+    }
+  });
+
+  test("readPrefs defaults timing to morning_of for legacy v1.1 prefs", () => {
+    const p = readPrefs({ enabled: true, time_local: "06:00" });
+    expect(p?.timing).toBe("morning_of");
+  });
+
+  test("readPrefs preserves a stored night_before timing", () => {
+    const p = readPrefs({ enabled: true, time_local: "21:00", timing: "night_before" });
+    expect(p?.timing).toBe("night_before");
+  });
+});
+
 describe("classifyPrefsReply — decline", () => {
   test.each([
     "no",

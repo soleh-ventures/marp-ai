@@ -138,4 +138,18 @@ describe("renderPlanSummary", () => {
     const summary = renderPlanSummary(plan);
     expect(summary).not.toContain("Berlin");
   });
+
+  test("F6: leads with the methodology when present", () => {
+    const plan = parsePlan({
+      ...validPlan,
+      methodology: "Pfitz base→build→peak→taper, 80/20 polarized, 10%-rule",
+    });
+    const summary = renderPlanSummary(plan);
+    expect(summary).toContain("Built on: Pfitz");
+  });
+
+  test("F6: omits the methodology line when absent", () => {
+    const plan = parsePlan(validPlan);
+    expect(renderPlanSummary(plan)).not.toContain("Built on:");
+  });
 });

@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { findTodaysSession, isInLocalWindow } from "./scheduler.js";
+import { findSessionForOffset, isInLocalWindow } from "./scheduler.js";
+
+// Back-compat shim for the existing morning-of tests (offset 0).
+const findTodaysSession = (
+  weeks: Parameters<typeof findSessionForOffset>[0],
+  now: Date,
+  tz: string,
+  start: string,
+) => findSessionForOffset(weeks, now, tz, start, 0);
 import type { PlanSession } from "../plan/types.js";
 
 describe("isInLocalWindow", () => {
@@ -86,5 +94,19 @@ describe("findTodaysSession", () => {
     const now = new Date("2026-06-10T04:00:00Z");
     const s = findTodaysSession(weeks, now, "Europe/Berlin", "2026-06-08");
     expect(s).toBeNull();
+  });
+
+  test("F7: offset 1 (night-before) returns TOMORROW's session", () => {
+    // Monday 2026-06-08 evening → offset 1 = Tuesday's easy run.
+    const now = new Date("2026-06-08T19:00:00Z"); // 21:00 Berlin Monday
+    const s = findSessionForOffset(weeks, now, "Europe/Berlin", "2026-06-08", 1);
+    expect(s?.type).toBe("easy");
+  });
+
+  test("F7: offset 1 the night before a rest day returns the rest session", () => {
+    // Sunday 2026-06-14 evening → offset 1 = Monday week 2 = rest.
+    const now = new Date("2026-06-14T19:00:00Z");
+    const s = findSessionForOffset(weeks, now, "Europe/Berlin", "2026-06-08", 1);
+    expect(s?.type).toBe("rest");
   });
 });

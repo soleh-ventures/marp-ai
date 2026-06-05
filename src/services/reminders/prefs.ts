@@ -10,17 +10,24 @@
 // here so the orchestrator can persist either an enabled or disabled
 // prefs object atomically.
 
+// F7 (v1.2): when to fire the reminder relative to the session day.
+//   morning_of  — the morning of the training day (default)
+//   night_before — the evening before, so the runner can prep
+export type ReminderTiming = "morning_of" | "night_before";
+
 export type ReminderPrefs = {
   enabled: boolean;
   // HH:MM in 24-hour local time (athletes.timezone). Only meaningful
   // when enabled=true; absent / ignored otherwise.
   time_local?: string;
+  // F7: defaults to "morning_of" when absent (back-compat with v1.1 prefs).
+  timing?: ReminderTiming;
 };
 
-// Classifier output. "time_specified" carries the parsed HH:MM.
+// Classifier output. "time_specified" carries the parsed HH:MM + timing.
 export type PrefsCaptureResult =
   | { kind: "decline" }
-  | { kind: "time_specified"; time_local: string }
+  | { kind: "time_specified"; time_local: string; timing: ReminderTiming }
   | { kind: "ambiguous" };
 
 const DECLINE_PATTERNS = [
@@ -40,8 +47,21 @@ const DECLINE_PATTERNS = [
 // Each pattern has explicit group positions so we don't conflate
 // the "minutes" group with the "am/pm" group across patterns.
 
+// F7: phrases that mean "remind me the evening before", not the morning of.
+const NIGHT_BEFORE_PATTERNS = [
+  /\bnight\s*before\b/i,
+  /\bnight-before\b/i,
+  /\bevening\s+before\b/i,
+  /\bday\s+before\b/i,
+  /\bnight\s+prior\b/i,
+];
+
 export function classifyPrefsReply(body: string): PrefsCaptureResult {
   if (DECLINE_PATTERNS.some((re) => re.test(body))) return { kind: "decline" };
+
+  const timing: ReminderTiming = NIGHT_BEFORE_PATTERNS.some((re) => re.test(body))
+    ? "night_before"
+    : "morning_of";
 
   let m: RegExpMatchArray | null;
 
@@ -52,19 +72,20 @@ export function classifyPrefsReply(body: string): PrefsCaptureResult {
       parseInt(m[1]!, 10),
       parseInt(m[2]!, 10),
       m[3]!.toLowerCase(),
+      timing,
     );
   }
 
   // "6am" / "6 AM" — hour only with am/pm
   m = body.match(/\b(\d{1,2})\s*(am|pm)\b/i);
   if (m) {
-    return toTimeResult(parseInt(m[1]!, 10), 0, m[2]!.toLowerCase());
+    return toTimeResult(parseInt(m[1]!, 10), 0, m[2]!.toLowerCase(), timing);
   }
 
   // "06:00" / "5:30" — bare 24-hour-ish
   m = body.match(/\b(\d{1,2}):(\d{2})\b/);
   if (m) {
-    return toTimeResult(parseInt(m[1]!, 10), parseInt(m[2]!, 10), null);
+    return toTimeResult(parseInt(m[1]!, 10), parseInt(m[2]!, 10), null, timing);
   }
 
   return { kind: "ambiguous" };
@@ -74,6 +95,7 @@ function toTimeResult(
   hourRaw: number,
   minute: number,
   ampm: "am" | "pm" | string | null,
+  timing: ReminderTiming,
 ): PrefsCaptureResult {
   if (isNaN(hourRaw) || isNaN(minute)) return { kind: "ambiguous" };
   if (minute < 0 || minute > 59) return { kind: "ambiguous" };
@@ -91,7 +113,7 @@ function toTimeResult(
 
   const time_local =
     `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`;
-  return { kind: "time_specified", time_local };
+  return { kind: "time_specified", time_local, timing };
 }
 
 // Helpers for working with the raw jsonb column. The shape can be
@@ -108,7 +130,10 @@ export function readPrefs(raw: unknown): ReminderPrefs | null {
     typeof obj.time_local === "string" && /^\d{2}:\d{2}$/.test(obj.time_local)
       ? obj.time_local
       : undefined;
-  return { enabled: obj.enabled, time_local };
+  // F7: default to morning_of for back-compat with v1.1 prefs (no timing).
+  const timing: ReminderTiming =
+    obj.timing === "night_before" ? "night_before" : "morning_of";
+  return { enabled: obj.enabled, time_local, timing };
 }
 
 // Default-disabled prefs object — written when the runner declines.
@@ -117,14 +142,25 @@ export const DECLINED_PREFS: ReminderPrefs = { enabled: false };
 // Standard prompts. Kept centralised so copy stays consistent across
 // surfaces and tests can lock the wording.
 export const REMINDER_PROMPT =
-  "\n\nLast thing — want me to ping you each morning of a training day with " +
-  "that day's session? Reply with a time (e.g. \"6am\") or \"no thanks\".";
+  "\n\nLast thing — want me to remind you about each training day's session? " +
+  "Tell me when: a time for the morning of (e.g. \"6am\"), or " +
+  "\"night before, 9pm\" to get it the evening before. Or \"no thanks\".";
 
 export const REMINDER_PROMPT_SIGNATURE = '"no thanks"';
 
-export const REMINDER_CAPTURED_REPLY = (time: string): string =>
-  `Locked in. I'll ping you at ${time} on training days. ` +
-  "You can change this anytime — just text me a new time or 'no reminders'.";
+export const REMINDER_CAPTURED_REPLY = (
+  time: string,
+  timing: ReminderTiming = "morning_of",
+): string => {
+  const when =
+    timing === "night_before"
+      ? `at ${time} the night before each training day`
+      : `at ${time} on training-day mornings`;
+  return (
+    `Locked in. I'll ping you ${when}. ` +
+    "You can change this anytime — just text me a new time or 'no reminders'."
+  );
+};
 
 export const REMINDER_DECLINED_REPLY =
   "All good — no reminders. You can flip this on anytime by texting me " +

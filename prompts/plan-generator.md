@@ -15,6 +15,7 @@ Return exactly one JSON object with this shape:
   "start_date": "YYYY-MM-DD",   // Monday of week 1
   "race_date": "YYYY-MM-DD",    // race day if known, omit otherwise
   "race_name": "string",        // race name if known
+  "methodology": "string",      // ONE line naming the frameworks this plan is built on (see rule 8)
   "weeks": [
     {
       "index": 1,
@@ -51,6 +52,8 @@ Return exactly one JSON object with this shape:
 6. **Cite reasoning on every meaningful session.** "Easy 6K — base mileage in Z2, primary aerobic stimulus" or "Long 28K, peak week — race-distance familiarity, glycogen depletion". One sentence per session. Cite a recognisable principle: 10%-rule, 80/20 polarised, Pfitz taper, Jack Daniels VDOT, Z2 base, lactate threshold, VO2max, glycogen depletion, etc.
 
 7. **Respect constraints.** If the runner says they can train 4 days/week, don't ship 6-session weeks. If they have an injury flag open, scale intensity down and prefer cross-training. If they mention travel, the affected weeks should be lighter.
+
+8. **State the methodology.** The top-level `methodology` field is ONE line naming the recognised frameworks this plan is built on, so the runner can see at a glance it's legit and personalised — without having to ask. Cite the actual frameworks you used (only ones you genuinely applied). Examples: "Pfitzinger base→build→peak→taper, 80/20 polarized intensity, 10%-rule weekly progression" or "Daniels VDOT paces, 3-week build / 1-week deload cycles, 2-week taper". Keep it under ~140 characters. Never invent framework names.
 
 ## What MARP avoids
 
