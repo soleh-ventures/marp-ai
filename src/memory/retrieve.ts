@@ -8,6 +8,10 @@ import {
   raceBlocks,
   stravaConnections,
 } from "../db/schema.js";
+import { getAthleticHistory } from "../flows/onboarding.js";
+import { getStoredPlan } from "../services/plan/storage.js";
+import { renderPlanForContext, type Plan } from "../services/plan/types.js";
+import { nowInZone, type ZonedNow } from "../services/reminders/timezone.js";
 
 // How many recent inbound + outbound messages to surface to the LLM as
 // dialog context. 20 is roughly the last week of chat at typical cadence
@@ -62,6 +66,8 @@ export async function getMemoryContext(
       id: athletes.id,
       name: athletes.name,
       locale: athletes.locale,
+      phone: athletes.phone,
+      timezone: athletes.timezone,
       athleticHistory: athletes.athleticHistory,
     })
     .from(athletes)
@@ -172,6 +178,16 @@ export async function getMemoryContext(
     .orderBy(desc(activities.startedAt))
     .limit(RECENT_ACTIVITY_LIMIT);
 
+  // F8 follow-up: anchor every conversational reply to the runner's real
+  // local date + weekday. Without this the coaching LLMs (domain + synth)
+  // had no idea what day it was and guessed — getting "your run today" and
+  // weekday math wrong. Resolve from stored tz, falling back to phone code.
+  const zonedToday = nowInZone(athlete.timezone, athlete.phone);
+
+  // Pull the stored plan out so we can render it with real calendar dates
+  // instead of dumping raw JSON the LLM has to do date math against.
+  const plan = getStoredPlan(getAthleticHistory(athlete.athleticHistory));
+
   return {
     text: formatContext({
       name: athlete.name,
@@ -183,6 +199,8 @@ export async function getMemoryContext(
       messages: recentChrono,
       activities: activityRows,
       stravaStatus,
+      zonedToday,
+      plan,
     }),
     athleteName: athlete.name,
     activeFlagCount: flagRows.length,
@@ -232,6 +250,12 @@ type FormatInput = {
   }>;
   activities?: Array<ActivityRow>;
   stravaStatus?: StravaStatus;
+  // The runner's local "today" — date + weekday + timezone. Surfaced as
+  // the first line so the LLM never derives the weekday itself.
+  zonedToday?: ZonedNow;
+  // The stored training plan, rendered with real dates rather than dumped
+  // as raw JSON inside athleticHistory.
+  plan?: Plan | null;
 };
 
 function formatDuration(seconds: number): string {
@@ -279,14 +303,34 @@ export function formatActivityLine(a: ActivityRow): string {
 export function formatContext(input: FormatInput): string {
   const parts: string[] = [];
 
+  // "Today" anchor — first line, so the LLM reads it before anything else.
+  // Capitalise the weekday for readability ("Friday", not "friday").
+  if (input.zonedToday) {
+    const { date, weekday, timezone } = input.zonedToday;
+    const wd = weekday.charAt(0).toUpperCase() + weekday.slice(1);
+    parts.push(`Today: ${date} (${wd}), timezone ${timezone}`);
+  }
+
   // Profile line.
   const nameStr = input.name ?? "Unknown";
   parts.push(`Athlete: ${nameStr} (locale ${input.locale})`);
 
+  // Athletic history JSON — but strip out the plan, which we render
+  // separately below with real calendar dates. Dumping the plan as JSON
+  // forces the LLM to do weekday math; the dated rendering does not.
   if (input.athleticHistory && typeof input.athleticHistory === "object") {
-    parts.push(
-      `Athletic history: ${JSON.stringify(input.athleticHistory)}`,
-    );
+    const { plan: _plan, ...rest } = input.athleticHistory as Record<
+      string,
+      unknown
+    >;
+    if (Object.keys(rest).length > 0) {
+      parts.push(`Athletic history: ${JSON.stringify(rest)}`);
+    }
+  }
+
+  // Stored plan, rendered with concrete dates per session.
+  if (input.plan) {
+    parts.push(renderPlanForContext(input.plan));
   }
 
   if (input.stravaStatus) {
@@ -306,9 +350,15 @@ export function formatContext(input: FormatInput): string {
   }
 
   if (input.block) {
-    const days = Math.ceil(
-      (input.block.raceDate.getTime() - Date.now()) / 86400000,
-    );
+    // Count days-to-race from the runner's local "today" when we have it,
+    // so the number doesn't drift by one near midnight in their timezone.
+    const fromMs = input.zonedToday
+      ? new Date(`${input.zonedToday.date}T00:00:00Z`).getTime()
+      : Date.now();
+    const raceMs = input.zonedToday
+      ? new Date(`${input.block.raceDate.toISOString().slice(0, 10)}T00:00:00Z`).getTime()
+      : input.block.raceDate.getTime();
+    const days = Math.ceil((raceMs - fromMs) / 86400000);
     const goal = input.block.goalFinishTime
       ? ` goal ${input.block.goalFinishTime}`
       : "";

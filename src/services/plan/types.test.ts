@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { parsePlan, renderPlanSummary } from "./types.js";
+import {
+  formatShortDate,
+  parsePlan,
+  renderPlanForContext,
+  renderPlanSummary,
+  sessionDate,
+} from "./types.js";
 
 const validPlan = {
   source: "generated",
@@ -124,7 +130,16 @@ describe("renderPlanSummary", () => {
     const summary = renderPlanSummary(plan);
     expect(summary).toContain("Berlin Marathon");
     expect(summary).toContain("1-week plan");
-    expect(summary).toContain("Peak week");
+    expect(summary).toContain("peak week");
+  });
+
+  test("lays out week 1 day-by-day with real calendar dates", () => {
+    const plan = parsePlan(validPlan);
+    const summary = renderPlanSummary(plan);
+    // start_date is 2026-06-08 (a Monday) → Tue session lands on 9 Jun.
+    expect(summary).toContain("Week 1");
+    expect(summary).toContain("Tue, 9 Jun");
+    expect(summary).toContain("6K easy Z2");
   });
 
   test("ends with a 'tell me what to change' nudge so the runner knows they can revise", () => {
@@ -145,11 +160,47 @@ describe("renderPlanSummary", () => {
       methodology: "Pfitz base→build→peak→taper, 80/20 polarized, 10%-rule",
     });
     const summary = renderPlanSummary(plan);
-    expect(summary).toContain("Built on: Pfitz");
+    expect(summary).toContain("Method: Pfitz");
   });
 
   test("F6: omits the methodology line when absent", () => {
     const plan = parsePlan(validPlan);
-    expect(renderPlanSummary(plan)).not.toContain("Built on:");
+    expect(renderPlanSummary(plan)).not.toContain("Method:");
+  });
+});
+
+describe("sessionDate", () => {
+  test("resolves weekday to a real date relative to start (week 1 Monday)", () => {
+    // 2026-06-08 is a Monday.
+    expect(sessionDate("2026-06-08", 1, "monday")).toBe("2026-06-08");
+    expect(sessionDate("2026-06-08", 1, "sunday")).toBe("2026-06-14");
+    // Week 3 Wednesday = start + 2 weeks + 2 days.
+    expect(sessionDate("2026-06-08", 3, "wednesday")).toBe("2026-06-24");
+  });
+
+  test("is stable regardless of server timezone (UTC-anchored math)", () => {
+    const prev = process.env.TZ;
+    process.env.TZ = "Pacific/Kiritimati"; // UTC+14, worst case for drift
+    try {
+      expect(sessionDate("2026-06-08", 2, "monday")).toBe("2026-06-15");
+    } finally {
+      process.env.TZ = prev;
+    }
+  });
+});
+
+describe("formatShortDate", () => {
+  test("formats with and without year", () => {
+    expect(formatShortDate("2026-06-09")).toBe("Tue, 9 Jun");
+    expect(formatShortDate("2026-09-27", true)).toBe("Sun, 27 Sep 2026");
+  });
+});
+
+describe("renderPlanForContext", () => {
+  test("renders every session with its real calendar date and type", () => {
+    const ctx = renderPlanForContext(parsePlan(validPlan));
+    expect(ctx).toContain("Week 1 [Mon, 8 Jun–Sun, 14 Jun]");
+    expect(ctx).toContain("Tue, 9 Jun: easy — 6K easy Z2");
+    expect(ctx).toContain("Sat, 13 Jun: long — 14K long run, conversational");
   });
 });
