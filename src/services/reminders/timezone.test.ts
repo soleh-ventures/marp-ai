@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { inferTimezoneFromPhone } from "./timezone.js";
+import {
+  inferCountryFromPhone,
+  inferTimezoneFromPhone,
+  nextMonday,
+  nowInZone,
+  resolveTimezone,
+} from "./timezone.js";
 
 describe("inferTimezoneFromPhone", () => {
   test("maps +49 → Europe/Berlin", () => {
@@ -34,5 +40,77 @@ describe("inferTimezoneFromPhone", () => {
 
   test("returns null for non-numeric input", () => {
     expect(inferTimezoneFromPhone("+abc")).toBeNull();
+  });
+});
+
+describe("inferCountryFromPhone (F8b)", () => {
+  test("maps +49 → DE", () => {
+    expect(inferCountryFromPhone("+4915123456789")).toBe("DE");
+  });
+  test("maps +62 → ID", () => {
+    expect(inferCountryFromPhone("+628123456789")).toBe("ID");
+  });
+  test("maps +1 → US", () => {
+    expect(inferCountryFromPhone("whatsapp:+12025551234")).toBe("US");
+  });
+  test("prefers longest prefix (+351 → PT, not +35/+3)", () => {
+    expect(inferCountryFromPhone("+351912345678")).toBe("PT");
+  });
+  test("returns null for unknown code", () => {
+    expect(inferCountryFromPhone("+999123")).toBeNull();
+  });
+});
+
+describe("resolveTimezone (F8)", () => {
+  test("prefers the stored timezone", () => {
+    expect(resolveTimezone("Asia/Tokyo", "+4915123456789")).toBe("Asia/Tokyo");
+  });
+  test("falls back to phone inference when no stored tz", () => {
+    expect(resolveTimezone(null, "+4915123456789")).toBe("Europe/Berlin");
+  });
+  test("falls back to UTC when both unknown", () => {
+    expect(resolveTimezone(null, "+999123")).toBe("UTC");
+  });
+});
+
+describe("nowInZone (F8)", () => {
+  // Fixed instant: 2026-06-05T08:40:00Z — Friday in Berlin (UTC+2 → 10:40).
+  const fri = new Date("2026-06-05T08:40:00Z");
+
+  test("computes date + weekday in the resolved zone", () => {
+    const z = nowInZone("Europe/Berlin", "+4915123456789", fri);
+    expect(z.date).toBe("2026-06-05");
+    expect(z.weekday).toBe("friday");
+    expect(z.timezone).toBe("Europe/Berlin");
+  });
+
+  test("crosses the date line correctly for a far-east zone", () => {
+    // 08:40Z is 17:40 in Tokyo, still Friday the 5th.
+    const z = nowInZone("Asia/Tokyo", "+819012345678", fri);
+    expect(z.date).toBe("2026-06-05");
+    expect(z.weekday).toBe("friday");
+  });
+
+  test("a late-evening Berlin instant is still the local day, not UTC next-day", () => {
+    // 2026-06-05T22:30Z = 00:30 on the 6th in Berlin (UTC+2).
+    const lateUtc = new Date("2026-06-05T22:30:00Z");
+    const z = nowInZone("Europe/Berlin", "+4915123456789", lateUtc);
+    expect(z.date).toBe("2026-06-06");
+    expect(z.weekday).toBe("saturday");
+  });
+});
+
+describe("nextMonday (F8)", () => {
+  test("Friday → the following Monday", () => {
+    const fri = new Date("2026-06-05T08:40:00Z");
+    expect(nextMonday("Europe/Berlin", "+4915123456789", fri)).toBe("2026-06-08");
+  });
+  test("a Monday returns itself (0 days added)", () => {
+    const mon = new Date("2026-06-08T08:00:00Z");
+    expect(nextMonday("Europe/Berlin", "+4915123456789", mon)).toBe("2026-06-08");
+  });
+  test("a Sunday returns the very next day", () => {
+    const sun = new Date("2026-06-07T08:00:00Z");
+    expect(nextMonday("Europe/Berlin", "+4915123456789", sun)).toBe("2026-06-08");
   });
 });

@@ -9,10 +9,14 @@
 // Output goes through parsePlan() — malformed LLM output throws,
 // caller is responsible for fallback messaging.
 
+import { eq } from "drizzle-orm";
 import { config } from "../../config.js";
+import { db } from "../../db/client.js";
+import { athletes } from "../../db/schema.js";
 import { getMemoryContext } from "../../memory/retrieve.js";
 import { getPlanGeneratorPrompt } from "../../router/prompts.js";
 import { llmCall } from "../llm-call.js";
+import { nextMonday, nowInZone } from "../reminders/timezone.js";
 import { parsePlan, type Plan } from "./types.js";
 
 export type GeneratePlanInput = {
@@ -23,9 +27,22 @@ export type GeneratePlanInput = {
 export async function generatePlan(input: GeneratePlanInput): Promise<Plan> {
   const memory = await getMemoryContext(input.athleteId);
 
-  const today = new Date().toISOString().slice(0, 10);
+  // F8 (v1.2): resolve the runner's local frame so "today" + the weekday
+  // are correct and the model never derives the weekday itself. Timezone
+  // may be null pre-plan, so we fall back to phone-code inference.
+  const [row] = await db
+    .select({ phone: athletes.phone, timezone: athletes.timezone })
+    .from(athletes)
+    .where(eq(athletes.id, input.athleteId))
+    .limit(1);
+  const phone = row?.phone ?? "";
+  const zoned = nowInZone(row?.timezone, phone);
+  // Compute week-1's Monday in code — the LLM is unreliable at date math.
+  const startDate = nextMonday(row?.timezone, phone);
+
   const userPayload =
-    `# Today's date\n${today}\n\n` +
+    `# Today's date\n${zoned.date} (${zoned.weekday})\n\n` +
+    `# Week 1 start_date (use EXACTLY this — it is the next Monday)\n${startDate}\n\n` +
     `# Athlete context\n${memory.text}\n\n` +
     `# Task\nBuild a complete periodised plan for this runner. Return ONLY the JSON described in your instructions — no markdown, no commentary.`;
 
@@ -41,7 +58,11 @@ export async function generatePlan(input: GeneratePlanInput): Promise<Plan> {
     { athleteId: input.athleteId, messageId: input.messageId, component: "domain" },
   );
 
-  return parsePlanResponse(res.text);
+  const plan = parsePlanResponse(res.text);
+  // Authoritative override — the start_date is computed in code, not
+  // trusted from the LLM. Keeps week-1 anchored to the real next Monday.
+  plan.start_date = startDate;
+  return plan;
 }
 
 // Extracts the JSON object from a raw LLM response. Tolerates the LLM

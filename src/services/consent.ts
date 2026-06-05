@@ -4,6 +4,7 @@ import { athletes } from "../db/schema.js";
 import { config } from "../config.js";
 import { buildMagicLinkUrl } from "./strava-magic-link.js";
 import { findByAthleteId } from "./strava-connections.js";
+import { inferCountryFromPhone } from "./reminders/timezone.js";
 
 // Pre-onboarding consent gate (GDPR Article 6 lawful basis).
 //
@@ -141,8 +142,17 @@ export function classifyConsentReply(body: string): ConsentDecision {
 }
 
 export async function recordConsentGranted(athleteId: string): Promise<void> {
+  // F8b (v1.2): capture the runner's country from their phone dial code
+  // at consent time — the earliest reliable point, so we get the insight
+  // dimension even for runners who drop off before generating a plan.
+  const [row] = await db
+    .select({ phone: athletes.phone })
+    .from(athletes)
+    .where(eq(athletes.id, athleteId))
+    .limit(1);
+  const country = row?.phone ? inferCountryFromPhone(row.phone) : null;
   await db
     .update(athletes)
-    .set({ consentGrantedAt: new Date() })
+    .set({ consentGrantedAt: new Date(), ...(country ? { country } : {}) })
     .where(eq(athletes.id, athleteId));
 }

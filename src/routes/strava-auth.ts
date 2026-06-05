@@ -8,6 +8,7 @@ import { buildAuthorizationUrl, exchangeCode } from "../services/strava-api.js";
 import { upsertStravaConnection } from "../services/strava-connections.js";
 import { backfillStravaHistory } from "../services/strava-backfill.js";
 import { sendWhatsApp } from "../services/twilio-send.js";
+import { getAthleticHistory } from "../flows/onboarding.js";
 
 export const stravaAuth = new Hono();
 
@@ -100,11 +101,27 @@ stravaAuth.get("/callback", async (c) => {
     // activities loaded — no second WhatsApp ping, no waiting on the
     // OAuth success page.
     const rows = await db
-      .select({ phone: athletes.phone })
+      .select({
+        phone: athletes.phone,
+        athleticHistory: athletes.athleticHistory,
+      })
       .from(athletes)
       .where(eq(athletes.id, athleteId))
       .limit(1);
     const phone = rows[0]?.phone;
+    // F1 (v1.2): after connecting, hand the runner back into onboarding.
+    // The OAuth callback is out-of-band (browser → server), so without
+    // this the "connected" message is terminal and the runner sits in
+    // silence not knowing to text again. Only kick off when onboarding
+    // hasn't started yet — if they're mid-onboarding or done, a kickoff
+    // would double-prompt.
+    const onboardingStatus = getAthleticHistory(rows[0]?.athleticHistory)
+      .onboarding?.status;
+    const shouldKickoff =
+      onboardingStatus === undefined || onboardingStatus === "pending";
+    const kickoff = shouldKickoff
+      ? "\n\nNow let's get you set up — what should I call you, and what race or goal are you working toward?"
+      : "";
     if (phone) {
       backfillStravaHistory(athleteId)
         .then(({ inserted }) => {
@@ -112,13 +129,13 @@ stravaAuth.get("/callback", async (c) => {
             inserted > 0
               ? ` I pulled in your last ${inserted} ${inserted === 1 ? "activity" : "activities"} (up to 60 days) — caught up on your recent training.`
               : " New runs will sync as you log them.";
-          return sendWhatsApp(phone, "✅ Strava connected!" + tail);
+          return sendWhatsApp(phone, "✅ Strava connected!" + tail + kickoff);
         })
         .catch((err) => {
           console.error("strava callback: backfill or confirm failed", err);
           // Don't leave the runner hanging if backfill blew up — still
-          // confirm the connection itself succeeded.
-          sendWhatsApp(phone, "✅ Strava connected!").catch(() => {});
+          // confirm the connection itself succeeded (with the kickoff).
+          sendWhatsApp(phone, "✅ Strava connected!" + kickoff).catch(() => {});
         });
     }
 

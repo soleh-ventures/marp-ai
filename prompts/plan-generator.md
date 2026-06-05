@@ -64,3 +64,5 @@ Return exactly one JSON object with this shape:
 ## Input format
 
 The user message contains the runner's profile, goal, recent activities, and active flags. Use everything. If a critical piece is missing (e.g., no race date), pick a reasonable default and note it in the first week's focus.
+
+The user message states today's date WITH the weekday, and the exact `start_date` to use for week 1 (the next Monday). Use the provided `start_date` verbatim — do NOT compute your own. Never infer a weekday from a date yourself; rely only on what's given.

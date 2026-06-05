@@ -6,6 +6,7 @@ import { desc } from "drizzle-orm";
 import { getOnboardingPrompt } from "../router/prompts.js";
 import { llmCall } from "../services/llm-call.js";
 import { appendProgressTail } from "./onboarding-stages.js";
+import { nowInZone } from "../services/reminders/timezone.js";
 
 // Onboarding state lives inside athletes.athletic_history under the
 // `onboarding` key. The siblings of `onboarding` are the actual
@@ -90,6 +91,8 @@ export async function runOnboardingTurn(
     .select({
       id: athletes.id,
       name: athletes.name,
+      phone: athletes.phone,
+      timezone: athletes.timezone,
       athleticHistory: athletes.athleticHistory,
     })
     .from(athletes)
@@ -118,6 +121,10 @@ export async function runOnboardingTurn(
     meta,
     dataSoFar: dataFields(history),
     dialog: chrono,
+    // F8 (v1.2): inject the runner's local date + weekday so the LLM
+    // never derives the weekday from a bare date string (it gets that
+    // wrong) and never sees a UTC-skewed "today".
+    zonedToday: nowInZone(athlete.timezone, athlete.phone),
   });
 
   const res = await llmCall(
@@ -201,6 +208,9 @@ type BuildUserInput = {
   meta: OnboardingMeta;
   dataSoFar: Record<string, unknown>;
   dialog: Array<{ direction: "in" | "out"; body: string }>;
+  // F8 (v1.2): the runner's local date + weekday. Optional so existing
+  // unit tests can omit it (falls back to UTC date, no weekday).
+  zonedToday?: { date: string; weekday: string };
 };
 
 export function buildUserPayload(input: BuildUserInput): string {
@@ -209,9 +219,12 @@ export function buildUserPayload(input: BuildUserInput): string {
   // The LLM's training-data date is frozen — without injecting today,
   // it'll guess at the year and get target_race.date wrong (Berlin
   // Marathon in 125 days might land in 2025 in the LLM's head when it's
-  // actually 2026). Cheap, decisive fix.
-  const today = new Date().toISOString().slice(0, 10);
-  parts.push(`# Today's date\n${today}`);
+  // actually 2026). We inject the WEEKDAY too so the LLM never derives
+  // it from the date string (it gets that wrong — F8).
+  const todayLine = input.zonedToday
+    ? `${input.zonedToday.date} (${input.zonedToday.weekday})`
+    : new Date().toISOString().slice(0, 10);
+  parts.push(`# Today's date\n${todayLine}`);
 
   parts.push(`# Onboarding state`);
   parts.push(

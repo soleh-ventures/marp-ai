@@ -85,6 +85,11 @@ export const athletes = pgTable(
     // code; runner can override via chat. NULL = no reminders possible
     // (reminder cron skips silently to avoid wrong-time messages).
     timezone: text("timezone"),
+    // F8b (v1.2): ISO 3166-1 alpha-2 country, inferred from the phone
+    // dial code at the same point timezone is set. Persisted purely as
+    // an insight dimension (where are runners signing up from?). NULL =
+    // unknown dial code or not yet derived.
+    country: text("country"),
     // V8: reminder preferences. JSON shape:
     //   { enabled: boolean, time_local: "HH:MM" }
     // enabled=false → opt-out (no reminders). When enabled=true, the
