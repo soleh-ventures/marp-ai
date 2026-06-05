@@ -23,10 +23,26 @@ export type CallContext = {
   component: LlmComponent;
 };
 
+// Hard cap on the I/O text we persist per row. Bounds row size against a
+// pathological payload (a runner pasting a huge plan, a runaway reply).
+// The dynamic context that matters for debugging fits comfortably under
+// this; anything past it is logged truncated with a marker.
+const IO_TEXT_CAP = 100_000;
+
+function capText(s: string): string {
+  return s.length > IO_TEXT_CAP
+    ? `${s.slice(0, IO_TEXT_CAP)}…[truncated ${s.length - IO_TEXT_CAP} chars]`
+    : s;
+}
+
 // Every LLM call in the app goes through this wrapper. It exists for one
 // reason: E13 — log model, tokens, cost, latency into llm_calls so we can
 // answer "what does a runner cost per week" from day 1. Skipping this
 // wrapper is a bug.
+//
+// It also captures input_user + output_text so a bad reply can be traced
+// to what produced it. These hold PII (runner context, health detail), so
+// athlete erasure NULLs them — see erasure.ts.
 export async function llmCall(
   req: LlmRequest,
   ctx: CallContext,
@@ -40,6 +56,8 @@ export async function llmCall(
     model: req.model,
     tokensIn: res.tokensIn,
     tokensOut: res.tokensOut,
+    inputUser: capText(req.user),
+    outputText: capText(res.text),
     // T6: persist the cache telemetry so we can verify caching is firing
     // in prod (SELECT count(*) FROM llm_calls WHERE cache_hit) and so the
     // cost estimate reflects the 10% rate on cache-read tokens.

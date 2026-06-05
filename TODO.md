@@ -125,3 +125,15 @@ The originally-numbered planner and delight features are still open. Listed here
 **Why**: GPX already covers every well-formed export from Garmin / Strava / Apple / Wahoo / Polar. FIT and TCX add coverage for the small set of devices that don't expose GPX, but it's a long tail.
 
 **Effort**: ~2–3 hr (FIT needs a parser library; TCX is XML and would reuse the GPX patterns).
+
+---
+
+## Tier 6 — Operational hygiene
+
+### O1 — Retention sweep for llm_calls I/O text
+
+**What**: A scheduled job that NULLs `input_user` / `output_text` on `llm_calls` rows older than N days (start ~30), while keeping the cost/token/latency/cache columns for long-term aggregate analytics. Mirror the existing reminder-runner shape (`src/scripts/run-reminders.ts`) or fold into an admin script.
+
+**Why**: We now capture full prompt I/O for answer-quality debugging (PR adding `input_user`/`output_text`). That text holds PII and grows unbounded — useful for days, a liability for years. Erasure already scrubs it per-athlete on deletion; this caps the steady-state exposure for everyone else. Until this ships, the table accumulates PII indefinitely.
+
+**Effort**: ~1–2 hr (one UPDATE on an indexed `created_at`, plus a cron entry).

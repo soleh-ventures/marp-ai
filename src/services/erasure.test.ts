@@ -87,6 +87,9 @@ describe("deleteAthlete", () => {
       tokensOut: 50,
       costEstimateUsd: 0.0001,
       latencyMs: 250,
+      // PII-bearing I/O — must be scrubbed on erasure.
+      inputUser: "left achilles tight, what should I do",
+      outputText: "rest 3 days then easy 5k",
     });
 
     const result = await deleteAthlete(a.id);
@@ -116,12 +119,15 @@ describe("deleteAthlete", () => {
     ).toEqual([]);
 
     // llm_calls row survives with athlete_id NULLed — preserves aggregate
-    // cost telemetry without retaining PII linkage.
+    // cost telemetry without retaining PII linkage. The I/O text columns,
+    // which DO hold PII, must be scrubbed to NULL on erasure.
     const remainingCalls = await db.select().from(llmCalls);
     expect(remainingCalls).toHaveLength(1);
     expect(remainingCalls[0]?.athleteId).toBeNull();
     expect(remainingCalls[0]?.messageId).toBeNull();
-    expect(remainingCalls[0]?.tokensIn).toBe(100);
+    expect(remainingCalls[0]?.tokensIn).toBe(100); // cost telemetry kept
+    expect(remainingCalls[0]?.inputUser).toBeNull(); // PII scrubbed
+    expect(remainingCalls[0]?.outputText).toBeNull(); // PII scrubbed
   });
 
   test("returns deleted=false for a non-existent athlete (idempotent)", async () => {
