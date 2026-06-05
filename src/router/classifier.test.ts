@@ -32,21 +32,14 @@ describe("parseRouting", () => {
     expect(r.domains).toEqual(["training", "injury"]);
   });
 
-  test("F4-a: complexity defaults to coaching when absent (conservative)", () => {
+  test("complexity defaults to coaching when absent", () => {
     const r = parseRouting(
       '{"domains":["training"],"confidence":0.9,"rationale":"x"}',
     );
     expect(r.complexity).toBe("coaching");
   });
 
-  test("F4-a: parses an explicit small_talk tag", () => {
-    const r = parseRouting(
-      '{"domains":["mental"],"confidence":0.3,"rationale":"greeting","complexity":"small_talk"}',
-    );
-    expect(r.complexity).toBe("small_talk");
-  });
-
-  test("F4-a: an unknown complexity value falls back to coaching", () => {
+  test("an unknown complexity value falls back to coaching", () => {
     const r = parseRouting(
       '{"domains":["training"],"confidence":0.9,"rationale":"x","complexity":"banana"}',
     );

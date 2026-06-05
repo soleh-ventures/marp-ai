@@ -88,37 +88,6 @@ describe("router.route — single domain", () => {
   });
 });
 
-describe("router.route — F4-a small-talk fast path", () => {
-  test("small_talk → 2 Haiku calls (classifier + reply), no domain/synth", async () => {
-    const { athleteId, messageId } = await makeAthleteAndMessage("thanks!");
-
-    mockProvider.setResponses([
-      {
-        // The small-talk reply call wraps the message with this prefix.
-        match: "The runner said:",
-        text: "Anytime — go get that run in.",
-      },
-      {
-        match: "thanks",
-        text: '{"domains":["mental"],"confidence":0.2,"rationale":"thanks","complexity":"small_talk"}',
-      },
-    ]);
-
-    const result = await route({ message: "thanks!", athleteId, messageId });
-
-    expect(result.routing.complexity).toBe("small_talk");
-    expect(result.domainAnswers).toHaveLength(0);
-    expect(result.finalText).toBe("Anytime — go get that run in.");
-    expect(result.llmCallCount).toBe(2);
-
-    // Both calls were the cheap classifier-tier (Haiku) model — no Sonnet.
-    expect(mockProvider.calls).toHaveLength(2);
-    for (const c of mockProvider.calls) {
-      expect(c.model).toBe(config.llm.classifierModel);
-    }
-  });
-});
-
 describe("router.route — multi-domain", () => {
   test("classifier picks 2 domains → 4 LLM calls (1 cls + 2 domain + 1 synth) in parallel", async () => {
     const { athleteId, messageId } = await makeAthleteAndMessage(

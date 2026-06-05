@@ -68,15 +68,7 @@ export function parseRouting(raw: string): Routing {
     typeof obj.confidence === "number" ? obj.confidence : 0.5;
   const rationale =
     typeof obj.rationale === "string" ? obj.rationale : "";
-  // F4-a: only an explicit "small_talk" downgrades to the cheap path.
-  // Anything else (including a missing/garbled field) stays "coaching" —
-  // conservative escalation, so a real question is never mis-tiered down.
-  const complexity =
-    obj.complexity === "small_talk"
-      ? "small_talk"
-      : obj.complexity === "simple"
-        ? "simple"
-        : "coaching";
+  const complexity = obj.complexity === "simple" ? "simple" : "coaching";
   // ET5: new fields. Default to safe values when the LLM doesn't emit
   // them (e.g. older prompts in flight during a deploy) — isFork false
   // means the rest of the pipeline runs unchanged, resolvesDecision null

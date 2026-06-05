@@ -22,13 +22,9 @@ Respond with STRICT JSON on a single line. No prose, no markdown fences, no comm
 
 Rules:
 - `domains` must be a non-empty array drawn from: training, nutrition, injury, mental, recovery, gear
-- `complexity` is one of:
-  - `"small_talk"` — greetings, thanks, acknowledgements, emoji-only, or pure social chat with NO coaching question ("hi", "thanks!", "ok cool", "good morning", "how's it going"). These get a short friendly reply, not a coaching answer.
-  - `"coaching"` — anything asking for real running guidance, however short ("what's my goal pace?", "knee hurts", "should I run today?"). When in ANY doubt, choose `"coaching"` — never downgrade a real question to small talk.
-  - `"simple"` — reserved; treat like coaching for now.
-  Default to `"coaching"` unless the message is clearly just social.
+- `complexity` is one of `"coaching"` or `"simple"`. Default to `"coaching"` for all messages.
 - `confidence` is your own 0..1 estimate of routing certainty
 - `rationale` is one short sentence (under 15 words) explaining the routing
 - `is_fork` is `true` when the runner's message is best answered by presenting alternative paths (e.g. "should I rest or run easy today?", "I'm tired and have a tempo on the plan — what should I do?"). It is `false` when the runner's question has a single right answer (e.g. "what's my goal pace?", "how does VDOT work?"). Default to `false` unless the message clearly invites a choice.
 - `resolves_decision` is reserved for a downstream binder step. Always emit `null` here.
-- For small talk, still pick the single best-fit domain (usually mental) with low confidence — but set `complexity` to `"small_talk"`
+- For greetings or social messages, pick the single best-fit domain (usually mental) with low confidence
