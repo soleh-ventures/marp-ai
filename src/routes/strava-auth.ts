@@ -120,7 +120,7 @@ stravaAuth.get("/callback", async (c) => {
     const shouldKickoff =
       onboardingStatus === undefined || onboardingStatus === "pending";
     const kickoff = shouldKickoff
-      ? "\n\nNow let's get you set up — what should I call you, and what race or goal are you working toward?"
+      ? "\n\nNow let's get you set up — reply and I'll grab a few quick details to build your plan."
       : "";
     if (phone) {
       backfillStravaHistory(athleteId)

@@ -78,13 +78,15 @@ export async function buildConsentAcceptedReply(
       "automatically — no need to retype the last few weeks. Tap the link " +
       "(expires in 5 min):\n\n" +
       linkUrl +
-      "\n\nPrefer to skip Strava? Just reply with your name and what race " +
-      "or goal you're training for — we can start that way too."
+      "\n\nPrefer to skip Strava? Just reply and I'll grab a few quick " +
+      "details to build your plan."
     );
   }
+  // F2-b: stay neutral — the onboarder sends the single compact question
+  // on the next turn, so we don't pre-ask specific fields here (that would
+  // double-ask).
   return (
-    "You're in. I'll ask a few quick questions to get your context, then we can dive in.\n\n" +
-    "First — what's your name and what race or goal are you training for?"
+    "You're in. Reply and I'll grab a few quick details to build your plan."
   );
 }
 

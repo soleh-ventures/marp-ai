@@ -5,8 +5,9 @@ import { athletes, messages as messagesTable } from "../db/schema.js";
 import { desc } from "drizzle-orm";
 import { getOnboardingPrompt } from "../router/prompts.js";
 import { llmCall } from "../services/llm-call.js";
-import { appendProgressTail } from "./onboarding-stages.js";
 import { nowInZone } from "../services/reminders/timezone.js";
+import { getStravaConnectStatus } from "../services/strava-connect.js";
+import { summarizeRecentTraining } from "../services/strava-activities.js";
 
 // Onboarding state lives inside athletes.athletic_history under the
 // `onboarding` key. The siblings of `onboarding` are the actual
@@ -116,6 +117,15 @@ export async function runOnboardingTurn(
     .limit(ONBOARDING_HISTORY_TURNS + 1);
   const chrono = [...recent].reverse().slice(0, -1); // drop the current inbound
 
+  // F3 (v1.2): tell the onboarder whether Strava is connected and what we
+  // already know about their training, so it can SKIP asking for weekly
+  // mileage / longest run when the data exists. Failures are non-fatal —
+  // onboarding still works, it just asks the fitness questions.
+  const [stravaStatus, fitness] = await Promise.all([
+    getStravaConnectStatus(athleteId).catch(() => ({ kind: "not_connected" as const })),
+    summarizeRecentTraining(athleteId).catch(() => null),
+  ]);
+
   const userPayload = buildUserPayload({
     runnerMessage,
     meta,
@@ -125,6 +135,9 @@ export async function runOnboardingTurn(
     // never derives the weekday from a bare date string (it gets that
     // wrong) and never sees a UTC-skewed "today".
     zonedToday: nowInZone(athlete.timezone, athlete.phone),
+    // F3 (v1.2): Strava context for the skip-fitness-questions rule.
+    stravaConnected: stravaStatus.kind === "already_connected",
+    fitnessSummary: fitness,
   });
 
   const res = await llmCall(
@@ -185,22 +198,42 @@ export async function runOnboardingTurn(
       ? parsed.extracted.name
       : athlete.name;
 
+  // F2-b/F8 (v1.2): if the runner told us their city, the onboarder maps
+  // it to an IANA timezone — the most authoritative source (beats Strava
+  // and phone inference). Persist it when valid.
+  const extractedTz =
+    typeof parsed.extracted.timezone === "string"
+      ? validIana(parsed.extracted.timezone)
+      : null;
+
   await db
     .update(athletes)
-    .set({ athleticHistory: newHistory, name: newName })
+    .set({
+      athleticHistory: newHistory,
+      name: newName,
+      ...(extractedTz ? { timezone: extractedTz } : {}),
+    })
     .where(eq(athletes.id, athleteId));
 
-  // V3 (v1.1): every onboarding reply that isn't the wrap-up gets a
-  // two-line tail — "Why I ask: …" + "Onboarding: N of 6 (~M min left)".
-  // Wrap-up turns (nextSection = complete) skip the tail so the
-  // celebration message lands cleanly.
-  const replyWithTail = appendProgressTail(parsed.reply.trim(), nextSection);
-
+  // F2-b (v1.2): no more progress tail. Onboarding is one compact message
+  // + at most one gap-fill follow-up, so there are no stages to show — the
+  // old "N of 6" tail (which the LLM-chosen section made non-monotonic)
+  // is gone entirely.
   return {
-    reply: replyWithTail,
+    reply: parsed.reply.trim(),
     newHistory,
     finishedThisTurn,
   };
+}
+
+// Validates an IANA timezone string via Intl; returns it or null.
+function validIana(tz: string): string | null {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return tz;
+  } catch {
+    return null;
+  }
 }
 
 type BuildUserInput = {
@@ -211,6 +244,9 @@ type BuildUserInput = {
   // F8 (v1.2): the runner's local date + weekday. Optional so existing
   // unit tests can omit it (falls back to UTC date, no weekday).
   zonedToday?: { date: string; weekday: string };
+  // F3 (v1.2): Strava context so the onboarder can skip fitness questions.
+  stravaConnected?: boolean;
+  fitnessSummary?: { weeklyKm: number; longestKm: number } | null;
 };
 
 export function buildUserPayload(input: BuildUserInput): string {
@@ -230,6 +266,21 @@ export function buildUserPayload(input: BuildUserInput): string {
   parts.push(
     `current_section: ${input.meta.current_section}\nturn: ${input.meta.turn_count + 1} of max ${MAX_ONBOARDING_TURNS}`,
   );
+
+  // F3 (v1.2): Strava context drives the skip-fitness-questions rule.
+  if (input.stravaConnected) {
+    if (input.fitnessSummary) {
+      parts.push(
+        `# Strava\nConnected. Recent training (last 4 weeks): ~${input.fitnessSummary.weeklyKm} km/week, longest run ~${input.fitnessSummary.longestKm} km. DO NOT ask for weekly mileage or longest run — you already have it.`,
+      );
+    } else {
+      parts.push(
+        "# Strava\nConnected, but no runs synced yet. You may ask a light fitness question.",
+      );
+    }
+  } else {
+    parts.push("# Strava\nNot connected — ask the fitness question normally.");
+  }
 
   const knownKeys = Object.keys(input.dataSoFar);
   if (knownKeys.length === 0) {

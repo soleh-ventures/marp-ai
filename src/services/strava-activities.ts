@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, gte } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { activities } from "../db/schema.js";
 import {
@@ -211,6 +211,41 @@ export async function bestTimezoneForAthlete(
   const fromStrava = await latestActivityTimezone(athleteId).catch(() => null);
   if (fromStrava) return fromStrava;
   return inferTimezoneFromPhone(phone);
+}
+
+// F3 (v1.2): a one-line fitness summary from the runner's recent runs,
+// so onboarding can SKIP asking for weekly mileage / longest run when we
+// already have the data. Looks at the last 28 days of run activities.
+// Returns null when there's nothing to summarise (not connected, or no
+// runs yet) — caller then asks the fitness questions as normal.
+export async function summarizeRecentTraining(
+  athleteId: string,
+): Promise<{ weeklyKm: number; longestKm: number } | null> {
+  const since = new Date(Date.now() - 28 * 24 * 60 * 60 * 1000);
+  const rows = await db
+    .select({ metrics: activities.metrics })
+    .from(activities)
+    .where(
+      and(
+        eq(activities.athleteId, athleteId),
+        eq(activities.discipline, "run"),
+        gte(activities.startedAt, since),
+      ),
+    );
+  if (rows.length === 0) return null;
+  let totalM = 0;
+  let longestM = 0;
+  for (const r of rows) {
+    const m = (r.metrics as Record<string, unknown> | null) ?? {};
+    const dist = typeof m.distance_m === "number" ? m.distance_m : 0;
+    totalM += dist;
+    if (dist > longestM) longestM = dist;
+  }
+  if (totalM === 0) return null;
+  return {
+    weeklyKm: Math.round(totalM / 1000 / 4),
+    longestKm: Math.round(longestM / 1000),
+  };
 }
 
 // Exposed for direct testing of the connection lookup path without

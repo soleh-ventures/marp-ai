@@ -6,11 +6,56 @@ import { assertNotProductionDb } from "../db/test-guard.js";
 import { athletes, messages } from "../db/schema.js";
 import { _resetProviderCache, mockProvider } from "../services/llm/index.js";
 import {
+  buildUserPayload,
   getAthleticHistory,
   isOnboarded,
   parseOnboardingResponse,
   runOnboardingTurn,
 } from "./onboarding.js";
+
+const baseMeta = {
+  status: "in_progress" as const,
+  current_section: "basics" as const,
+  started_at: new Date().toISOString(),
+  turn_count: 0,
+};
+
+describe("buildUserPayload (F2-b/F3)", () => {
+  test("tells the LLM to skip fitness questions when Strava has data", () => {
+    const payload = buildUserPayload({
+      runnerMessage: "hi",
+      meta: baseMeta,
+      dataSoFar: {},
+      dialog: [],
+      stravaConnected: true,
+      fitnessSummary: { weeklyKm: 32, longestKm: 21 },
+    });
+    expect(payload).toContain("DO NOT ask for weekly mileage");
+    expect(payload).toContain("32 km/week");
+  });
+
+  test("asks fitness normally when Strava not connected", () => {
+    const payload = buildUserPayload({
+      runnerMessage: "hi",
+      meta: baseMeta,
+      dataSoFar: {},
+      dialog: [],
+      stravaConnected: false,
+    });
+    expect(payload).toContain("Not connected");
+  });
+
+  test("injects date + weekday when zonedToday is given", () => {
+    const payload = buildUserPayload({
+      runnerMessage: "hi",
+      meta: baseMeta,
+      dataSoFar: {},
+      dialog: [],
+      zonedToday: { date: "2026-06-05", weekday: "friday" },
+    });
+    expect(payload).toContain("2026-06-05 (friday)");
+  });
+});
 
 beforeAll(() => {
   (config.llm as { provider: "mock" | "anthropic" }).provider = "mock";
