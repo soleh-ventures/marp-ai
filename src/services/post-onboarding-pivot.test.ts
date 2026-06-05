@@ -77,6 +77,13 @@ describe("classifyPivotReply — build patterns", () => {
     "choose b",
     "the second one",
     "second option",
+    // RC1: the exact phrasing that fell through before — no article after
+    // "build", so the old pattern missed it.
+    "build training plan",
+    "build my training plan",
+    "build me a training plan",
+    "create my plan",
+    "design a plan for me",
   ])("treats %p as build", (input) => {
     expect(classifyPivotReply(input)).toBe("build");
   });
@@ -96,6 +103,12 @@ describe("classifyPivotReply — other / fall-through", () => {
     "go for a run",
     "can I take a rest day",
     "first or second, which is better?",
+    // RC1 false-positive guard: generic "build my X" coaching questions
+    // must NOT be read as plan-build intent (they'd wrongly trigger
+    // generatePlan via the no-plan fallback).
+    "how do I build my base?",
+    "how do I build my speed",
+    "what's the best way to build endurance",
   ])("falls through to other for %p (runner gets routed to expert)", (input) => {
     expect(classifyPivotReply(input)).toBe("other");
   });

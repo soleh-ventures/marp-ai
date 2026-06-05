@@ -303,17 +303,35 @@ export function formatActivityLine(a: ActivityRow): string {
 export function formatContext(input: FormatInput): string {
   const parts: string[] = [];
 
-  // "Today" anchor — first line, so the LLM reads it before anything else.
-  // Capitalise the weekday for readability ("Friday", not "friday").
+  // "Now" anchor — first line, so the LLM reads it before anything else.
+  // RC2 (v1.3): include the clock TIME (LLMs invent it otherwise) and make
+  // this the single source of truth — the LLM must not re-derive the day or
+  // time, and must ignore any older city in the history that conflicts with
+  // this timezone (e.g. after a "I'm in Tokyo now" override).
   if (input.zonedToday) {
-    const { date, weekday, timezone } = input.zonedToday;
+    const { date, weekday, time, timezone } = input.zonedToday;
     const wd = weekday.charAt(0).toUpperCase() + weekday.slice(1);
-    parts.push(`Today: ${date} (${wd}), timezone ${timezone}`);
+    parts.push(
+      `Now (ground truth — use this, never compute the day/time yourself, ` +
+        `and ignore any conflicting city in the history below): ` +
+        `${wd}, ${date}, ${time} in ${timezone}.`,
+    );
   }
 
   // Profile line.
   const nameStr = input.name ?? "Unknown";
   parts.push(`Athlete: ${nameStr} (locale ${input.locale})`);
+
+  // RC3 (v1.3): MARP's real capabilities, so the coaching LLM stops denying
+  // features it actually has (it was telling runners "I can't send
+  // reminders"). State them plainly; never claim you can't do these.
+  parts.push(
+    "MARP can: send WhatsApp reminders on training days (the runner sets a " +
+      "time, or asks for the night before — just confirm and tell them it's " +
+      "set), add sessions to their calendar, and read their Strava activity. " +
+      "If the runner asks to be reminded, treat it as a real feature — never " +
+      "say you can't send reminders or scheduled messages.",
+  );
 
   // Athletic history JSON — but strip out the plan, which we render
   // separately below with real calendar dates. Dumping the plan as JSON

@@ -120,18 +120,29 @@ describe("getMemoryContext", () => {
     expect(ctx.recentMessageCount).toBe(0);
   });
 
-  test("anchors the context with a 'Today' line so the LLM knows the date/weekday", async () => {
+  test("anchors the context with a 'Now' line carrying date, weekday, time + tz", async () => {
     const [a] = await db
       .insert(athletes)
       .values({ phone: "+15551110009", name: "Dated", timezone: "Asia/Jakarta" })
       .returning();
     if (!a) throw new Error("insert failed");
     const ctx = await getMemoryContext(a.id);
-    // First line is the date anchor, with the resolved timezone + a
-    // capitalised weekday.
-    expect(ctx.text.split("\n")[0]).toMatch(
-      /^Today: \d{4}-\d{2}-\d{2} \([A-Z][a-z]+\), timezone Asia\/Jakarta$/,
-    );
+    // RC2: first line is the ground-truth anchor — capitalised weekday,
+    // ISO date, HH:MM clock time, and the resolved timezone.
+    const first = ctx.text.split("\n")[0] ?? "";
+    expect(first).toContain("Now (ground truth");
+    expect(first).toMatch(/[A-Z][a-z]+day, \d{4}-\d{2}-\d{2}, \d{2}:\d{2} in Asia\/Jakarta/);
+  });
+
+  test("RC3: context states MARP can send reminders so the LLM stops denying it", async () => {
+    const [a] = await db
+      .insert(athletes)
+      .values({ phone: "+15551110010", name: "Cap" })
+      .returning();
+    if (!a) throw new Error("insert failed");
+    const ctx = await getMemoryContext(a.id);
+    expect(ctx.text).toContain("MARP can:");
+    expect(ctx.text.toLowerCase()).toContain("reminder");
   });
 
   test("renders a stored plan with real calendar dates instead of raw JSON", async () => {

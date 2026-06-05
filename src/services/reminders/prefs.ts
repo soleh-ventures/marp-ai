@@ -56,6 +56,23 @@ const NIGHT_BEFORE_PATTERNS = [
   /\bnight\s+prior\b/i,
 ];
 
+// RC3 (v1.3): does this message look like the runner asking to set or change
+// a reminder, OUTSIDE the post-plan capture prompt? ("remind me at 6am",
+// "can you remind me the night before", "turn off reminders"). Used to route
+// to the prefs capture anytime, so reminders aren't only settable once.
+const REMINDER_REQUEST_PATTERNS = [
+  /\bremind me\b/i,
+  /\breminders?\b/i,
+  /\bping me\b/i,
+  /\bnudge me\b/i,
+  /\bnotify me\b/i,
+  /\bwake me\b/i,
+];
+
+export function looksLikeReminderRequest(body: string): boolean {
+  return REMINDER_REQUEST_PATTERNS.some((re) => re.test(body));
+}
+
 export function classifyPrefsReply(body: string): PrefsCaptureResult {
   if (DECLINE_PATTERNS.some((re) => re.test(body))) return { kind: "decline" };
 

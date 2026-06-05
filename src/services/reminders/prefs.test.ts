@@ -4,8 +4,24 @@ import {
   REMINDER_PROMPT_SIGNATURE,
   classifyPrefsReply,
   isPrefsAsked,
+  looksLikeReminderRequest,
   readPrefs,
 } from "./prefs.js";
+
+describe("looksLikeReminderRequest (RC3)", () => {
+  for (const m of [
+    "remind me at 6am",
+    "can you remind me the night before",
+    "turn off reminders",
+    "ping me before my run",
+    "notify me at 7",
+  ]) {
+    test(`fires on: "${m}"`, () => expect(looksLikeReminderRequest(m)).toBe(true));
+  }
+  for (const m of ["how far is my long run?", "thanks coach", "what's my pace"]) {
+    test(`quiet on: "${m}"`, () => expect(looksLikeReminderRequest(m)).toBe(false));
+  }
+});
 
 describe("REMINDER_PROMPT", () => {
   test("contains the signature so process-incoming can detect a reply context", () => {
