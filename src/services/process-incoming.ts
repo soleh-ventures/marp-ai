@@ -8,6 +8,7 @@ import {
 } from "../flows/onboarding.js";
 import { getMemoryContext } from "../memory/retrieve.js";
 import { route } from "../router/index.js";
+import { classify } from "../router/classifier.js";
 import { sendWhatsApp, TwilioSendError } from "./twilio-send.js";
 import { fireThinkingAck } from "./thinking-ack.js";
 import {
@@ -20,8 +21,9 @@ import {
 } from "./post-onboarding-pivot.js";
 import { generatePlan } from "./plan/generator.js";
 import { ingestPlan } from "./plan/ingest.js";
-import { saveAthletePlan } from "./plan/storage.js";
-import { renderPlanSummary } from "./plan/types.js";
+import { adjustPlan } from "./plan/adjust.js";
+import { saveAthletePlan, getStoredPlan } from "./plan/storage.js";
+import { renderPlanSummary, renderOpenQuestions } from "./plan/types.js";
 import {
   DECLINED_PREFS,
   REMINDER_AMBIGUOUS_REPLY,
@@ -423,7 +425,11 @@ export async function processIncomingMessage(
             ...(tz ? { timezone: tz } : {}),
           })
           .where(eq(athletes.id, athleteId));
-        replyText = renderPlanSummary(plan) + REMINDER_PROMPT;
+        // v1.3 (A3): draft-first hooks — invite collaboration on the fresh
+        // plan before the reminder ask. Empty string when the model had no
+        // open questions, so the message stays clean.
+        replyText =
+          renderPlanSummary(plan) + renderOpenQuestions(plan) + REMINDER_PROMPT;
       } catch (err) {
         console.error("plan-generator failed:", (err as Error).message);
         replyText =
@@ -471,14 +477,37 @@ export async function processIncomingMessage(
     // 10-25s, so the runner needs a signal that MARP received the message.
     fireThinkingAck(athleteRow.phone);
     const memory = await getMemoryContext(athleteId);
-    const result = await route({
-      message: body,
-      athleteId,
-      messageId,
-      contextSummary: memory.text,
-    });
-    replyText = result.finalText.trim();
-    routerFrame = result.frame;
+    // v1.3 (A2): classify once up front so we can intercept a plan-edit
+    // before the expensive expert pipeline. The routing is passed into
+    // route() below so we never classify twice.
+    const routing = await classify(body, { athleteId, messageId });
+
+    if (routing.planEdit && getStoredPlan(history)) {
+      // v1.3 (A1): runner wants to change their existing plan. Apply the
+      // edit via targeted mutation (Sonnet), save, show the new version.
+      const result = await adjustPlan({ athleteId, messageId, editRequest: body });
+      if (result.ok) {
+        await saveAthletePlan(athleteId, result.plan);
+        replyText =
+          "Done — updated your plan. Here's the new version:\n\n" +
+          renderPlanSummary(result.plan);
+      } else {
+        // no_plan is guarded above; this is the parse-failure path.
+        replyText =
+          "I couldn't apply that change cleanly. Try rephrasing it — " +
+          "e.g. \"move my long run to Saturday\" or \"make week 3 easier\".";
+      }
+    } else {
+      const result = await route({
+        message: body,
+        athleteId,
+        messageId,
+        contextSummary: memory.text,
+        precomputedRouting: routing,
+      });
+      replyText = result.finalText.trim();
+      routerFrame = result.frame;
+    }
   }
 
   if (!replyText) {

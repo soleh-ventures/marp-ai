@@ -62,6 +62,11 @@ export type Plan = {
   // first in the summary so the runner sees it's a real, principled plan
   // without having to ask. Optional — ingested plans may not have one.
   methodology?: string;
+  // v1.3 (A3 draft-first hooks): 2-3 things the generator wasn't sure about
+  // and wants the runner to confirm or tweak ("long run is Sunday — Saturday
+  // better?"). Rendered once after the first plan is presented; the runner's
+  // reply is a normal plan_edit. Generation-time only — not re-shown after edits.
+  open_questions?: string[];
   weeks: PlanWeek[];
   generated_at: string;
 };
@@ -120,6 +125,13 @@ export function parsePlan(raw: unknown): Plan {
     typeof obj.methodology === "string" && obj.methodology.trim().length > 0
       ? obj.methodology.trim()
       : undefined;
+  // v1.3 (A3): cap at 3, drop empties — defensive against an over-eager model.
+  const open_questions = Array.isArray(obj.open_questions)
+    ? obj.open_questions
+        .filter((q): q is string => typeof q === "string" && q.trim().length > 0)
+        .map((q) => q.trim())
+        .slice(0, 3)
+    : undefined;
 
   if (!Array.isArray(obj.weeks)) {
     throw new Error("plan: weeks must be an array");
@@ -136,9 +148,19 @@ export function parsePlan(raw: unknown): Plan {
     race_date,
     race_name,
     methodology,
+    open_questions: open_questions && open_questions.length > 0 ? open_questions : undefined,
     weeks,
     generated_at: new Date().toISOString(),
   };
+}
+
+// v1.3 (A3): render the draft-first hooks as a short tail after the plan
+// summary. Returns "" when there are none, so callers can concatenate
+// unconditionally. Only used at first-plan presentation.
+export function renderOpenQuestions(plan: Plan): string {
+  if (!plan.open_questions || plan.open_questions.length === 0) return "";
+  const lines = plan.open_questions.map((q) => `• ${q}`).join("\n");
+  return `\n\nA couple of things I want to get right — just tell me:\n${lines}`;
 }
 
 function parseWeek(raw: unknown, fallbackIndex: number): PlanWeek {

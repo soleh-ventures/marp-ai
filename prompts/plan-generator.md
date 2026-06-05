@@ -16,6 +16,7 @@ Return exactly one JSON object with this shape:
   "race_date": "YYYY-MM-DD",    // race day if known, omit otherwise
   "race_name": "string",        // race name if known
   "methodology": "string",      // ONE line naming the frameworks this plan is built on (see rule 8)
+  "open_questions": ["string"], // 2-3 short questions, see rule 9 — the things you'd confirm to personalise the plan
   "weeks": [
     {
       "index": 1,
@@ -65,6 +66,8 @@ Return exactly one JSON object with this shape:
    - **Weight → fueling.** When a session warrants a fueling cue (long runs, doubles), base carb/hydration guidance on bodyweight (≈30–60 g carbs/hr, ~0.4–0.8 g carb/kg/hr for long efforts) rather than generic numbers.
    - **Sex → physiology, not different periodisation.** The framework is the same. Where it genuinely matters, reflect it lightly: e.g. flag iron/recovery and RED-S/under-fuelling awareness for women in a long-run or recovery `reasoning`; do NOT change paces by sex (paces come from VDOT/goal time), and never stereotype.
    - If any field is missing, just proceed without it — never block or guess a weight.
+
+10. **Surface 2-3 `open_questions`.** These are the things you made a reasonable default on but would confirm with the runner to make the plan truly theirs — the start of a collaboration, not a quiz. Pick the choices that actually shaped the plan: long-run day (e.g. "I put your long run on Sunday — does Saturday fit your week better?"), whether a quality day lands on a workable weekday, intensity comfort, or a constraint you guessed at. Keep each to one short sentence, phrased as an easy yes/tweak. Skip anything the runner already told you. If the inputs were complete enough that you're genuinely not unsure about anything, return an empty array.
 
 ## What MARP avoids
 

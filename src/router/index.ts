@@ -21,7 +21,10 @@ export async function route(input: RouterInput): Promise<RouterResult> {
     messageId: input.messageId,
   };
 
-  const routing = await classify(input.message, ctx);
+  // v1.3 (A2): reuse a routing the caller already computed (e.g.
+  // process-incoming classified up front to check plan_edit) so we don't
+  // pay for a second classifier call on the hot path.
+  const routing = input.precomputedRouting ?? (await classify(input.message, ctx));
 
   const domainAnswers = await Promise.all(
     routing.domains.map((d) =>
