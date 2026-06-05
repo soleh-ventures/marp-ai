@@ -10,22 +10,56 @@ import { isDomain, type Routing } from "./types.js";
 //
 // System prompt lives in prompts/classifier.md so we can iterate on it
 // without redeploying code.
+// Safe default when the classifier can't be trusted (empty input, or two
+// failed parse attempts). Routing to a single training-domain coaching
+// reply is the least-surprising outcome for a running coach: the runner
+// still gets a real answer instead of silence. is_fork stays false so the
+// pipeline runs its normal single-domain path.
+const FALLBACK_ROUTING: Routing = {
+  domains: ["training"],
+  confidence: 0,
+  rationale: "classifier fallback (unparseable response)",
+  complexity: "coaching",
+  isFork: false,
+  resolvesDecision: null,
+};
+
 export async function classify(
   message: string,
   ctx: { athleteId?: string; messageId?: string },
 ): Promise<Routing> {
-  const res = await llmCall(
-    {
-      model: config.llm.classifierModel,
-      system: getClassifierPrompt(),
-      user: message,
-      maxTokens: 200,
-      temperature: 0,
-      cacheSystem: true,
-    },
-    { athleteId: ctx.athleteId, messageId: ctx.messageId, component: "classifier" },
-  );
-  return parseRouting(res.text);
+  // An empty/whitespace message makes the classifier respond conversationally
+  // ("send me the runner's message…") rather than with JSON — the exact
+  // failure seen in prod. Skip the call entirely and route to the safe
+  // default; there's nothing to classify anyway.
+  if (!message.trim()) return FALLBACK_ROUTING;
+
+  // One-shot retry, then fall back. The classifier occasionally (Haiku,
+  // ~rarely) emits a prose preamble instead of JSON; re-asking clears it.
+  // We must NEVER throw out of here — a classifier blip used to bubble all
+  // the way up and leave the runner with no reply at all.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await llmCall(
+      {
+        model: config.llm.classifierModel,
+        system: getClassifierPrompt(),
+        user: message,
+        maxTokens: 200,
+        temperature: 0,
+        cacheSystem: true,
+      },
+      { athleteId: ctx.athleteId, messageId: ctx.messageId, component: "classifier" },
+    );
+    try {
+      return parseRouting(res.text);
+    } catch (err) {
+      console.error(
+        `classifier parse failed (attempt ${attempt + 1}/2):`,
+        (err as Error).message,
+      );
+    }
+  }
+  return FALLBACK_ROUTING;
 }
 
 // Defensive parse — the classifier is instructed to emit one-line JSON but

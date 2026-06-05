@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseRouting } from "./classifier.js";
+import { classify, parseRouting } from "./classifier.js";
 
 describe("parseRouting", () => {
   test("happy path: clean JSON", () => {
@@ -116,4 +116,20 @@ describe("parseRouting", () => {
     );
     expect(r.resolvesDecision).toBeNull();
   });
+});
+
+describe("classify — resilience", () => {
+  // An empty / whitespace message must NOT hit the LLM (it responds with
+  // prose, not JSON — the prod crash) and must return a safe coaching
+  // default so the pipeline still produces a reply.
+  test.each(["", "   ", "\n\t "])(
+    "returns the safe fallback for blank input %p without calling the LLM",
+    async (input) => {
+      const r = await classify(input, {});
+      expect(r.domains).toEqual(["training"]);
+      expect(r.complexity).toBe("coaching");
+      expect(r.isFork).toBe(false);
+      expect(r.confidence).toBe(0);
+    },
+  );
 });

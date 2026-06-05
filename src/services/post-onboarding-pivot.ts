@@ -53,29 +53,80 @@ export const PIVOT_REPLY_BUILD =
   "(weeks, peak mileage, phases), then drill into weekly cadence, then " +
   "daily sessions. Each step takes a couple minutes. Ready when you are.";
 
-// Classifier — high-precision regex for the two paths. Falls back to
-// "other" for anything ambiguous so the runner isn't trapped.
+// Classifier — high-precision for the two paths. Falls back to "other"
+// for anything ambiguous so the runner isn't trapped.
+//
+// Two layers:
+//   1. Descriptive intent ("I have a plan" / "build me one") — matches
+//      regardless of any a/b letter.
+//   2. Letter / ordinal selection. We're only ever called when the runner
+//      is replying to the "(a) or (b)" prompt, so a reply that boils down
+//      to a single option letter — even wrapped in selection filler like
+//      "let's do a", "go with b", "option a" — IS the choice. This is what
+//      fixes the old bug where only a BARE "a"/"b" matched and natural
+//      phrasings like "lets do with a" fell through to the expert router
+//      (which then replied "not sure what you mean by 'a'").
 export type PivotChoice = "byo" | "build" | "other";
 
-const BYO_PATTERNS = [
-  /^\s*[a]\s*[\.\)]?\s*$/i,
+const BYO_DESCRIPTIVE = [
   /\b(have|got)\s+(a|one|my)\s+(plan|training|own)/i,
   /\b(already|existing)\s+(have|got|use)\b/i,
   /\bcoach\s+me\s+through\b/i,
   /\bbring\s+(my|own)\b/i,
 ];
 
-const BUILD_PATTERNS = [
-  /^\s*[b]\s*[\.\)]?\s*$/i,
-  /\b(build|make|create|design)\s+(one|a|me|the)\b/i,
+const BUILD_DESCRIPTIVE = [
+  /\b(build|make|create|design)\s+(one|a|me|the|it)\b/i,
   /\bfrom\s+scratch\b/i,
   /\byou\s+(build|make|create|design)\b/i,
   /\bgenerate\b.{0,15}\bplan\b/i,
 ];
 
+// Selection filler — words people wrap around the option letter when
+// choosing ("let's do option a please"). Stripping these leaves just the
+// letter when the message is genuinely a choice.
+const SELECTION_FILLER = new Set([
+  "lets", "let", "do", "doing", "go", "going", "with", "the", "option",
+  "options", "choice", "choose", "choosing", "pick", "picking", "take",
+  "taking", "select", "want", "wanna", "gimme", "give", "me", "i", "ill",
+  "id", "just", "please", "pls", "ok", "okay", "sure", "yeah", "yep", "yes",
+  "that", "one", "number", "for", "is", "it", "my", "plan",
+]);
+
+// Reduce a reply to a single option letter when that's all it amounts to
+// after dropping selection filler. Returns null when the message carries
+// real content beyond the choice (e.g. a question) so it routes onward.
+function extractChoiceLetter(body: string): "a" | "b" | null {
+  const tokens = body
+    .toLowerCase()
+    // Drop apostrophes first so contractions collapse to single filler
+    // tokens ("let's" → "lets", "i'll" → "ill") instead of leaving stray
+    // fragments ("s", "ll") that defeat the single-letter check.
+    .replace(/['’]/g, "")
+    .replace(/[^a-z\s]/g, " ")
+    .split(/\s+/)
+    .filter((t) => t.length > 0 && !SELECTION_FILLER.has(t));
+  if (tokens.length === 1 && (tokens[0] === "a" || tokens[0] === "b")) {
+    return tokens[0] as "a" | "b";
+  }
+  return null;
+}
+
 export function classifyPivotReply(body: string): PivotChoice {
-  if (BYO_PATTERNS.some((re) => re.test(body))) return "byo";
-  if (BUILD_PATTERNS.some((re) => re.test(body))) return "build";
+  if (BYO_DESCRIPTIVE.some((re) => re.test(body))) return "byo";
+  if (BUILD_DESCRIPTIVE.some((re) => re.test(body))) return "build";
+
+  const letter = extractChoiceLetter(body);
+  if (letter === "a") return "byo";
+  if (letter === "b") return "build";
+
+  // Ordinal phrasings — "the first one" / "second option". Only when
+  // exactly one of the two is referenced (avoid "first or second?").
+  const first = /\b(first|1st)\b/i.test(body);
+  const second = /\b(second|2nd)\b/i.test(body);
+  if (first && !second) return "byo";
+  if (second && !first) return "build";
+
   return "other";
 }
 

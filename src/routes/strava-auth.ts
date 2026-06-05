@@ -8,7 +8,7 @@ import { buildAuthorizationUrl, exchangeCode } from "../services/strava-api.js";
 import { upsertStravaConnection } from "../services/strava-connections.js";
 import { backfillStravaHistory } from "../services/strava-backfill.js";
 import { sendWhatsApp } from "../services/twilio-send.js";
-import { getAthleticHistory } from "../flows/onboarding.js";
+import { getAthleticHistory, runOnboardingTurn } from "../flows/onboarding.js";
 
 export const stravaAuth = new Hono();
 
@@ -119,24 +119,30 @@ stravaAuth.get("/callback", async (c) => {
       .onboarding?.status;
     const shouldKickoff =
       onboardingStatus === undefined || onboardingStatus === "pending";
-    const kickoff = shouldKickoff
-      ? "\n\nNow let's get you set up — reply and I'll grab a few quick details to build your plan."
-      : "";
     if (phone) {
-      backfillStravaHistory(athleteId)
-        .then(({ inserted }) => {
-          const tail =
-            inserted > 0
-              ? ` I pulled in your last ${inserted} ${inserted === 1 ? "activity" : "activities"} (up to 60 days) — caught up on your recent training.`
-              : " New runs will sync as you log them.";
-          return sendWhatsApp(phone, "✅ Strava connected!" + tail + kickoff);
-        })
-        .catch((err) => {
-          console.error("strava callback: backfill or confirm failed", err);
-          // Don't leave the runner hanging if backfill blew up — still
-          // confirm the connection itself succeeded (with the kickoff).
-          sendWhatsApp(phone, "✅ Strava connected!" + kickoff).catch(() => {});
-        });
+      // Fire-and-forget: build the single consolidated confirmation message
+      // and send it once. Backfill failure only degrades the "I pulled in N
+      // runs" tail — it must not block the connect confirmation OR the
+      // onboarding kickoff. We run onboarding turn 1 here (no inbound message
+      // → null id) AFTER backfill so the onboarder sees the synced mileage
+      // and skips asking for it.
+      void (async () => {
+        let tail = " New runs will sync as you log them.";
+        try {
+          const { inserted } = await backfillStravaHistory(athleteId);
+          if (inserted > 0) {
+            tail = ` I pulled in your last ${inserted} ${inserted === 1 ? "activity" : "activities"} (up to 60 days) — caught up on your recent training.`;
+          }
+        } catch (err) {
+          console.error("strava callback: backfill failed", err);
+        }
+        // Fix: don't ask the runner to "reply first" — actually ASK the first
+        // onboarding question now so they answer it directly.
+        const kickoff = shouldKickoff ? await buildOnboardingKickoff(athleteId) : "";
+        await sendWhatsApp(phone, "✅ Strava connected!" + tail + kickoff);
+      })().catch((err) =>
+        console.error("strava callback: confirm/kickoff send failed", err),
+      );
     }
 
     return c.html(
@@ -157,3 +163,30 @@ stravaAuth.get("/callback", async (c) => {
     );
   }
 });
+
+// Run onboarding turn 1 out-of-band so the post-Strava-connect message
+// carries the ACTUAL first onboarding question (the compact details list)
+// instead of "reply and I'll grab a few details." This persists the
+// in-progress onboarding state, so the runner's reply lands as turn 2 and
+// gets extracted normally. Returns the question prefixed with a blank line
+// so it reads cleanly after the "Strava connected" confirmation.
+//
+// Best-effort: if the onboarding LLM call fails we fall back to the old
+// static nudge rather than leaving the runner with no next step.
+async function buildOnboardingKickoff(athleteId: string): Promise<string> {
+  try {
+    // No inbound message drove this turn → null message id. The synthetic
+    // runner message just triggers the first turn; the onboarder ignores it
+    // and emits its standard "set you up" list (minus mileage, since Strava
+    // is now connected).
+    const result = await runOnboardingTurn(
+      athleteId,
+      null,
+      "Just connected my Strava.",
+    );
+    return "\n\n" + result.reply.trim();
+  } catch (err) {
+    console.error("strava callback: onboarding kickoff failed", err);
+    return "\n\nNow let's get you set up — reply and I'll grab a few quick details to build your plan.";
+  }
+}
