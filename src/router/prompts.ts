@@ -146,6 +146,12 @@ export function getPlanIngestPrompt(): string {
   return loadFile("plan-ingest.md").body;
 }
 
+// F4-a: short, no-coaching reply for messages the classifier tagged
+// small_talk. Answered by a single cheap Haiku call.
+export function getSmallTalkPrompt(): string {
+  return loadFile("smalltalk.md").body;
+}
+
 export function getDomainPromptFile(domain: Domain): PromptFile {
   return loadFile(`domains/${domain}.md`);
 }
@@ -156,6 +162,7 @@ export function getDomainPromptFile(domain: Domain): PromptFile {
 export function validateAllPrompts(): void {
   loadFile("classifier.md");
   loadFile("synthesizer.md");
+  loadFile("smalltalk.md");
   loadFile("onboarding.md");
   loadFile("plan-generator.md");
   loadFile("plan-ingest.md");
