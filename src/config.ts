@@ -70,4 +70,19 @@ export const config = {
     secret: process.env.MAGIC_LINK_SECRET ?? "",
     ttlSeconds: 300, // 5 minutes; eng-review A3.
   },
+  reminders: {
+    // V8 deploy reality: Railway runs one always-on web service (the
+    // Twilio webhook listener), so reminders dispatch in-process via a
+    // 15-min interval timer inside the running server rather than an
+    // external cron. Default ON in prod; off elsewhere so dev/test
+    // boots never fire real WhatsApp messages. Explicit override via
+    // REMINDER_SCHEDULER=on|off.
+    inProcess:
+      process.env.REMINDER_SCHEDULER === "on" ||
+      (isProd && process.env.REMINDER_SCHEDULER !== "off"),
+    // Interval must equal the scheduler's WINDOW_MINUTES so each local
+    // reminder time falls in exactly one window per day (no gaps, no
+    // overlap).
+    intervalMs: 15 * 60 * 1000,
+  },
 };

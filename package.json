@@ -15,7 +15,9 @@
     "strava:bootstrap": "bun run src/scripts/bootstrap-strava-webhook.ts",
     "admin:delete-athlete": "bun run src/scripts/admin-delete-athlete.ts",
     "admin:summarize-block": "bun run src/scripts/admin-summarize-block.ts",
-    "admin:export-athlete": "bun run src/scripts/admin-export-athlete.ts"
+    "admin:export-athlete": "bun run src/scripts/admin-export-athlete.ts",
+    "eval:plan": "bun run src/scripts/eval-plan.ts",
+    "reminders:run": "bun run src/scripts/run-reminders.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.97.1",

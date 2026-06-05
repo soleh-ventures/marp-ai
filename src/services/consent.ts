@@ -1,6 +1,9 @@
 import { eq } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { athletes } from "../db/schema.js";
+import { config } from "../config.js";
+import { buildMagicLinkUrl } from "./strava-magic-link.js";
+import { findByAthleteId } from "./strava-connections.js";
 
 // Pre-onboarding consent gate (GDPR Article 6 lawful basis).
 //
@@ -44,13 +47,59 @@ export const PRIVACY_NOTICE =
   "You can text \"delete my account\" anytime — instant wipe, no questions.\n\n" +
   "Reply YES to start. Reply STOP if this isn't for you.";
 
-// Sent after the runner accepts the privacy notice. Combines the
-// consent confirmation with the first onboarding question so the
-// conversation doesn't stall waiting for the runner to take initiative
-// — onboarding then handles the runner's answer on the next turn.
-export const CONSENT_ACCEPTED_REPLY =
-  "You're in. I'll ask a few quick questions to get your context, then we can dive in.\n\n" +
-  "First — what's your name and what race or goal are you training for?";
+// V2 (v1.1 flow redesign) — Strava-first.
+//
+// Sent after the runner accepts the privacy notice. Bundles the Strava
+// connect offer with a fallback onboarding bridge. Opt-in framing —
+// Strava is the recommended path because the LLM can ground every reply
+// in real activity data, but the runner can skip and start onboarding
+// by just replying with their name and goal.
+//
+// Why bundle vs. a separate Strava-only message:
+//   - Avoids introducing a new state vertex (Strava-pending) in the
+//     consent state machine, which would have to be detected by
+//     last-outbound matching.
+//   - The runner can act on either path from a single message: tap the
+//     link in their browser, or just type the answer.
+//   - If Strava IS connected before the next inbound, onboarding (V3)
+//     can confirm questions instead of asking them.
+//
+// Fallback: if the public webhook base isn't configured (link can't be
+// generated), fall back to a text-only bridge to onboarding so the
+// runner isn't left without a question to answer.
+export async function buildConsentAcceptedReply(
+  athleteId: string,
+): Promise<string> {
+  const linkUrl = await buildStravaConnectLink(athleteId);
+  if (linkUrl) {
+    return (
+      "You're in. Quickest start: connect Strava and I'll see your training " +
+      "automatically — no need to retype the last few weeks. Tap the link " +
+      "(expires in 5 min):\n\n" +
+      linkUrl +
+      "\n\nPrefer to skip Strava? Just reply with your name and what race " +
+      "or goal you're training for — we can start that way too."
+    );
+  }
+  return (
+    "You're in. I'll ask a few quick questions to get your context, then we can dive in.\n\n" +
+    "First — what's your name and what race or goal are you training for?"
+  );
+}
+
+// Returns a fresh magic link if Strava is configured and the athlete
+// isn't already connected. Otherwise null — the consent reply falls
+// back to the plain onboarding bridge.
+async function buildStravaConnectLink(athleteId: string): Promise<string | null> {
+  if (!config.twilio.publicWebhookBase) return null;
+  try {
+    const conn = await findByAthleteId(athleteId);
+    if (conn && !conn.revokedAt) return null;
+    return buildMagicLinkUrl(athleteId);
+  } catch {
+    return null;
+  }
+}
 
 export const CONSENT_DECLINED_REPLY =
   "All good — your data won't be stored. If you change your mind, text MARP again anytime.";

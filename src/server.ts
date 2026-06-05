@@ -7,6 +7,9 @@ import { validateAllPrompts } from "./router/prompts.js";
 import { twilioWebhook } from "./webhooks/twilio.js";
 import { stravaWebhook } from "./webhooks/strava.js";
 import { stravaAuth } from "./routes/strava-auth.js";
+import { cronReminders } from "./routes/cron-reminders.js";
+import { cal } from "./routes/cal.js";
+import { startReminderScheduler } from "./services/reminders/in-process.js";
 
 // Fail loud at boot if any prompt file is missing or unparseable. Better
 // than discovering it when the first runner texts MARP.
@@ -26,6 +29,14 @@ app.route("/webhooks/strava", stravaWebhook);
 // first in the matched chain.
 app.use("/auth/strava/*", rateLimit({ windowMs: 60_000, limit: 5 }));
 app.route("/auth/strava", stravaAuth);
+
+// V8 — reminder cron. Hit by Railway scheduler every 15 min with
+// X-Cron-Secret header. Returns dispatch stats as JSON.
+app.route("/internal/cron", cronReminders);
+
+// V9 — calendar ICS hosting. GET /cal/:token.ics returns the signed
+// session as RFC 5545. Public; the token is the auth.
+app.route("/cal", cal);
 
 app.get("/health", async (c) => {
   const dbOk = await ping();
@@ -51,4 +62,8 @@ if (isEntry) {
   serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
     console.log(`marp-ai listening on http://localhost:${port}`);
   });
+  // V8 deploy: dispatch reminders from inside this always-on service on
+  // a 15-min interval (no external cron / second service). No-op unless
+  // REMINDER_SCHEDULER is on (default on in prod). See in-process.ts.
+  startReminderScheduler();
 }

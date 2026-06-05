@@ -138,6 +138,14 @@ export function getOnboardingPrompt(): string {
   return loadFile("onboarding.md").body;
 }
 
+export function getPlanGeneratorPrompt(): string {
+  return loadFile("plan-generator.md").body;
+}
+
+export function getPlanIngestPrompt(): string {
+  return loadFile("plan-ingest.md").body;
+}
+
 export function getDomainPromptFile(domain: Domain): PromptFile {
   return loadFile(`domains/${domain}.md`);
 }
@@ -149,6 +157,8 @@ export function validateAllPrompts(): void {
   loadFile("classifier.md");
   loadFile("synthesizer.md");
   loadFile("onboarding.md");
+  loadFile("plan-generator.md");
+  loadFile("plan-ingest.md");
   for (const d of DOMAINS) {
     loadFile(`domains/${d}.md`);
   }

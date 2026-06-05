@@ -9,6 +9,30 @@ import {
 import { getMemoryContext } from "../memory/retrieve.js";
 import { route } from "../router/index.js";
 import { sendWhatsApp, TwilioSendError } from "./twilio-send.js";
+import { fireThinkingAck } from "./thinking-ack.js";
+import {
+  PIVOT_QUESTION,
+  PIVOT_REPLY_BYO,
+  classifyPivotReply,
+  getPivotState,
+  isAwaitingPivotChoice,
+  withPivotState,
+} from "./post-onboarding-pivot.js";
+import { generatePlan } from "./plan/generator.js";
+import { ingestPlan } from "./plan/ingest.js";
+import { saveAthletePlan } from "./plan/storage.js";
+import { renderPlanSummary } from "./plan/types.js";
+import {
+  DECLINED_PREFS,
+  REMINDER_AMBIGUOUS_REPLY,
+  REMINDER_CAPTURED_REPLY,
+  REMINDER_DECLINED_REPLY,
+  REMINDER_PROMPT,
+  REMINDER_PROMPT_SIGNATURE,
+  classifyPrefsReply,
+  isPrefsAsked,
+} from "./reminders/prefs.js";
+import { inferTimezoneFromPhone } from "./reminders/timezone.js";
 import {
   buildConnectReply,
   buildOnboardingStravaOffer,
@@ -28,10 +52,10 @@ import { detectFlags } from "./flag-detector.js";
 import { autoTransitionStaleBlocks } from "../memory/summarize.js";
 import { ingestFileFromMediaUrl } from "../ingest/file.js";
 import {
-  CONSENT_ACCEPTED_REPLY,
   CONSENT_AMBIGUOUS_REPLY,
   CONSENT_DECLINED_REPLY,
   PRIVACY_NOTICE,
+  buildConsentAcceptedReply,
   classifyConsentReply,
   recordConsentGranted,
 } from "./consent.js";
@@ -73,6 +97,7 @@ export async function processIncomingMessage(
         athleticHistory: athletes.athleticHistory,
         lastSeenAt: athletes.lastSeenAt,
         consentGrantedAt: athletes.consentGrantedAt,
+        reminderPrefs: athletes.reminderPrefs,
       })
       .from(athletes)
       .where(eq(athletes.id, athleteId))
@@ -181,8 +206,12 @@ export async function processIncomingMessage(
       }
       // accept: persist consent, send the warm-handoff. The next
       // inbound from the runner triggers onboarding.
+      // V2: handoff bundles the Strava-first connect offer. Runner
+      // can tap the link (then onboarding picks up after) or just
+      // reply with their name/goal to skip Strava.
       await recordConsentGranted(athleteId);
-      await sendAndPersist(athleteId, athleteRow.phone, CONSENT_ACCEPTED_REPLY);
+      const acceptedReply = await buildConsentAcceptedReply(athleteId);
+      await sendAndPersist(athleteId, athleteRow.phone, acceptedReply);
       return;
     }
     // First-touch case: no prior notice. Ship it and exit.
@@ -268,6 +297,9 @@ export async function processIncomingMessage(
   } else if (!isOnboarded(history)) {
     // Onboarding branch. The flow persists the updated athletic_history
     // itself; we just take the reply.
+    // V1: fire "thinking…" immediately — onboarding LLM round-trip is
+    // typically 2-4s, long enough for silence to feel ambiguous.
+    fireThinkingAck(athleteRow.phone);
     const onboardingResult = await runOnboardingTurn(
       athleteId,
       messageId,
@@ -275,11 +307,130 @@ export async function processIncomingMessage(
     );
     replyText = onboardingResult.reply;
 
-    // When onboarding wraps up this turn, append a Strava connect offer
-    // so the runner can link their account right away.
+    // When onboarding wraps up this turn:
+    //  1. Strava offer (if not connected) — second-chance prompt
+    //  2. V5: append the post-onboarding plan pivot — runners need a
+    //     concrete next step, not "ask me anything"
+    //  3. V5: persist pivot_state = "awaiting_choice" so the next
+    //     inbound is matched against the a/b classifier
     if (onboardingResult.finishedThisTurn) {
       const offer = await buildOnboardingStravaOffer(athleteId).catch(() => null);
       if (offer) replyText += offer;
+      replyText += PIVOT_QUESTION;
+      const updatedHistory = withPivotState(
+        onboardingResult.newHistory,
+        "awaiting_choice",
+      );
+      await db
+        .update(athletes)
+        .set({ athleticHistory: updatedHistory })
+        .where(eq(athletes.id, athleteId));
+    }
+  } else if (
+    !isPrefsAsked(athleteRow.reminderPrefs) &&
+    lastOutboundBody !== null &&
+    lastOutboundBody.includes(REMINDER_PROMPT_SIGNATURE)
+  ) {
+    // V8: runner is responding to the reminder pref prompt.
+    // We're past the pivot (plan is saved); just classify and persist.
+    const result = classifyPrefsReply(body);
+    if (result.kind === "decline") {
+      await db
+        .update(athletes)
+        .set({ reminderPrefs: DECLINED_PREFS })
+        .where(eq(athletes.id, athleteId));
+      replyText = REMINDER_DECLINED_REPLY;
+    } else if (result.kind === "time_specified") {
+      await db
+        .update(athletes)
+        .set({
+          reminderPrefs: { enabled: true, time_local: result.time_local },
+        })
+        .where(eq(athletes.id, athleteId));
+      replyText = REMINDER_CAPTURED_REPLY(result.time_local);
+    } else {
+      replyText = REMINDER_AMBIGUOUS_REPLY;
+    }
+  } else if (getPivotState(history) === "awaiting_plan") {
+    // V6: runner is in the BYO branch — anything they send next is
+    // treated as the pasted plan. Parse via LLM ingest, save, and
+    // confirm. On parse failure, send a friendly clarification so
+    // the runner can retry.
+    fireThinkingAck(athleteRow.phone);
+    const result = await ingestPlan({ athleteId, messageId, pastedText: body });
+    if (result.ok) {
+      await saveAthletePlan(athleteId, result.plan);
+      const updatedHistory = withPivotState(history, "done");
+      const tz = inferTimezoneFromPhone(athleteRow.phone);
+      await db
+        .update(athletes)
+        .set({
+          athleticHistory: updatedHistory,
+          ...(tz ? { timezone: tz } : {}),
+        })
+        .where(eq(athletes.id, athleteId));
+      replyText = renderPlanSummary(result.plan) + REMINDER_PROMPT;
+    } else if (result.reason === "not_a_plan") {
+      replyText =
+        "That didn't look like a training plan to me — looked more like a " +
+        "general message. Paste the plan itself (week-by-week or a summary), " +
+        "or reply 'build it' if you'd rather I build one from scratch.";
+    } else {
+      replyText =
+        "I downloaded the plan but couldn't quite parse it. Try splitting it " +
+        "into clear week sections (Week 1, Week 2…) and resend? Or reply " +
+        "'build it' and I'll build one from scratch.";
+    }
+  } else if (isAwaitingPivotChoice(lastOutboundBody, history)) {
+    // V5: runner is responding to the post-onboarding pivot.
+    // Classify a/b; on "other", fall through to the expert router so
+    // a free-form question never traps the runner inside the pivot.
+    const choice = classifyPivotReply(body);
+    if (choice === "byo") {
+      replyText = PIVOT_REPLY_BYO;
+      const updatedHistory = withPivotState(history, "awaiting_plan");
+      await db
+        .update(athletes)
+        .set({ athleticHistory: updatedHistory })
+        .where(eq(athletes.id, athleteId));
+    } else if (choice === "build") {
+      // V6: runner picked (b) — generate the plan in this same turn
+      // rather than asking them to send another "go" message.
+      fireThinkingAck(athleteRow.phone);
+      try {
+        const plan = await generatePlan({ athleteId, messageId });
+        await saveAthletePlan(athleteId, plan);
+        const updatedHistory = withPivotState(history, "done");
+        const tz = inferTimezoneFromPhone(athleteRow.phone);
+        await db
+          .update(athletes)
+          .set({
+            athleticHistory: updatedHistory,
+            ...(tz ? { timezone: tz } : {}),
+          })
+          .where(eq(athletes.id, athleteId));
+        replyText = renderPlanSummary(plan) + REMINDER_PROMPT;
+      } catch (err) {
+        console.error("plan-generator failed:", (err as Error).message);
+        replyText =
+          "Couldn't build the plan this turn — something went sideways on " +
+          "my side. Try again in a moment, or paste a plan you already have " +
+          "and I'll work from that.";
+      }
+    } else {
+      // Ambiguous reply — route to the expert. Don't auto-clear the
+      // pivot_state; the runner can still answer a/b on the next turn
+      // if they want to.
+      fireThinkingAck(athleteRow.phone);
+      const memory = await getMemoryContext(athleteId);
+      const result = await route({
+        message: body,
+        athleteId,
+        messageId,
+        contextSummary: memory.text,
+      });
+      replyText = result.finalText.trim();
+      routerFrame = result.frame;
     }
   } else if (looksLikeStravaConnect(body)) {
     // Explicit Strava connect intent — skip the expert router and reply
@@ -288,6 +439,9 @@ export async function processIncomingMessage(
     replyText = buildConnectReply(status);
   } else {
     // Normal expert routing branch.
+    // V1: fire "thinking…" immediately — multi-domain routing can take
+    // 10-25s, so the runner needs a signal that MARP received the message.
+    fireThinkingAck(athleteRow.phone);
     const memory = await getMemoryContext(athleteId);
     const result = await route({
       message: body,

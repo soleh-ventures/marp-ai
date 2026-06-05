@@ -5,6 +5,7 @@ import { athletes, messages as messagesTable } from "../db/schema.js";
 import { desc } from "drizzle-orm";
 import { getOnboardingPrompt } from "../router/prompts.js";
 import { llmCall } from "../services/llm-call.js";
+import { appendProgressTail } from "./onboarding-stages.js";
 
 // Onboarding state lives inside athletes.athletic_history under the
 // `onboarding` key. The siblings of `onboarding` are the actual
@@ -182,8 +183,14 @@ export async function runOnboardingTurn(
     .set({ athleticHistory: newHistory, name: newName })
     .where(eq(athletes.id, athleteId));
 
+  // V3 (v1.1): every onboarding reply that isn't the wrap-up gets a
+  // two-line tail — "Why I ask: …" + "Onboarding: N of 6 (~M min left)".
+  // Wrap-up turns (nextSection = complete) skip the tail so the
+  // celebration message lands cleanly.
+  const replyWithTail = appendProgressTail(parsed.reply.trim(), nextSection);
+
   return {
-    reply: parsed.reply.trim(),
+    reply: replyWithTail,
     newHistory,
     finishedThisTurn,
   };
