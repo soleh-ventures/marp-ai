@@ -107,23 +107,35 @@ export async function runReminderScheduler(opts: {
       continue;
     }
 
-    const session = findTodaysSession(plan.weeks, opts.now, c.timezone, plan.start_date);
+    // F7: night_before reminders fire the evening BEFORE a training day,
+    // so they describe TOMORROW's session (offset = 1). morning_of fires
+    // on the day itself (offset = 0).
+    const nightBefore = prefs.timing === "night_before";
+    const offset = nightBefore ? 1 : 0;
+
+    const session = findSessionForOffset(
+      plan.weeks,
+      opts.now,
+      c.timezone,
+      plan.start_date,
+      offset,
+    );
     if (!session || session.type === "rest") {
       stats.skipped_rest_day++;
       continue;
     }
 
-    // V9: build calendar links for today's session. Skip silently if
+    // V9: build calendar links for the session's date. Skip silently if
     // the public base isn't configured (dev) — reminders still ship
     // without the links.
-    const today = localTodayString(opts.now, c.timezone);
+    const sessionDate = localDateStringForOffset(opts.now, c.timezone, offset);
     let icsUrl: string | undefined;
     let googleUrl: string | undefined;
-    if (today && config.twilio.publicWebhookBase) {
+    if (sessionDate && config.twilio.publicWebhookBase) {
       try {
-        const token = generateCalToken(c.id, today);
+        const token = generateCalToken(c.id, sessionDate);
         icsUrl = buildIcsUrl(token);
-        googleUrl = buildGoogleQuickAddUrl(session, today, prefs.time_local);
+        googleUrl = buildGoogleQuickAddUrl(session, sessionDate, prefs.time_local);
       } catch (err) {
         console.error(
           `reminder: cal link build failed for athlete ${c.id}: ${(err as Error).message}`,
@@ -136,6 +148,7 @@ export async function runReminderScheduler(opts: {
       session,
       icsUrl,
       googleUrl,
+      nightBefore,
     });
     try {
       await sendWhatsApp(c.phone, text);
@@ -151,20 +164,18 @@ export async function runReminderScheduler(opts: {
   return stats;
 }
 
-// Returns YYYY-MM-DD of "today" in the athlete's local timezone.
-function localTodayString(now: Date, timezone: string): string | null {
-  try {
-    const fmt = new Intl.DateTimeFormat("en-CA", {
-      timeZone: timezone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
-    // en-CA gives YYYY-MM-DD format
-    return fmt.format(now);
-  } catch {
-    return null;
-  }
+// Returns YYYY-MM-DD of "today + dayOffset days" in the athlete's local
+// timezone. offset 0 = today, 1 = tomorrow (F7 night-before reminders).
+function localDateStringForOffset(
+  now: Date,
+  timezone: string,
+  dayOffset: number,
+): string | null {
+  const parts = getLocalParts(now, timezone);
+  if (!parts) return null;
+  const d = new Date(`${parts.year}-${pad(parts.month)}-${pad(parts.day)}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + dayOffset);
+  return d.toISOString().slice(0, 10);
 }
 
 // Returns true when the athlete's local "now" is within [time_local,
@@ -232,24 +243,30 @@ function getLocalParts(now: Date, timezone: string): LocalParts | null {
   }
 }
 
-// Find the session in plan.weeks that matches "today" in the athlete's
-// timezone. Returns null if today is past the end of the plan or the
-// plan has no session on that day.
-export function findTodaysSession(
+// Find the session in plan.weeks for "today + dayOffset" in the athlete's
+// timezone. offset 0 = today (morning_of), 1 = tomorrow (night_before).
+// Returns null if the target day is before the plan starts, past its end,
+// or has no session.
+export function findSessionForOffset(
   weeks: Array<{ index: number; sessions: PlanSession[] }>,
   now: Date,
   timezone: string,
   start_date: string,
+  dayOffset: number,
 ): PlanSession | null {
   const parts = getLocalParts(now, timezone);
   if (!parts) return null;
 
-  // Compute the local-time date string in the athlete's timezone, then
-  // diff against the plan's start_date to get the week index.
-  const localDate = new Date(`${parts.year}-${pad(parts.month)}-${pad(parts.day)}T00:00:00Z`);
+  // Target local date = today (in tz) + offset days. Adding whole UTC days
+  // to a UTC-midnight anchor is safe — we only read Y-M-D + weekday back.
+  const target = new Date(
+    `${parts.year}-${pad(parts.month)}-${pad(parts.day)}T00:00:00Z`,
+  );
+  target.setUTCDate(target.getUTCDate() + dayOffset);
+
   const startDate = new Date(`${start_date}T00:00:00Z`);
   const dayDiff = Math.floor(
-    (localDate.getTime() - startDate.getTime()) / (24 * 60 * 60 * 1000),
+    (target.getTime() - startDate.getTime()) / (24 * 60 * 60 * 1000),
   );
   if (dayDiff < 0) return null;
 
@@ -257,8 +274,14 @@ export function findTodaysSession(
   const week = weeks.find((w) => w.index === weekIndex);
   if (!week) return null;
 
-  return week.sessions.find((s) => s.day_of_week === parts.dayOfWeek) ?? null;
+  const targetDow = DOW_ORDER[target.getUTCDay()];
+  return week.sessions.find((s) => s.day_of_week === targetDow) ?? null;
 }
+
+// JS getUTCDay(): 0 = Sunday … 6 = Saturday.
+const DOW_ORDER: DayOfWeek[] = [
+  "sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
+];
 
 function pad(n: number): string {
   return n.toString().padStart(2, "0");

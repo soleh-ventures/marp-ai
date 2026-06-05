@@ -18,16 +18,23 @@ export type BuildReminderInput = {
   // and a freshly-signed cal token.
   icsUrl?: string;
   googleUrl?: string;
+  // F7: true for a night-before reminder (describes tomorrow's session,
+  // sent the evening before). Changes the greeting + day framing.
+  nightBefore?: boolean;
 };
 
 export function buildReminderText(input: BuildReminderInput): string {
   const headline = describeSession(input.session);
   const why = input.session.reasoning ? `\n\nWhy: ${input.session.reasoning}` : "";
-  const lead =
-    input.name && input.name !== "you"
-      ? `Morning ${input.name} — `
-      : "Morning — ";
-  let body = `${lead}today's session:\n\n${headline}${why}`;
+  const named = input.name && input.name !== "you";
+  let body: string;
+  if (input.nightBefore) {
+    const lead = named ? `Evening ${input.name} — ` : "Evening — ";
+    body = `${lead}tomorrow's session:\n\n${headline}${why}`;
+  } else {
+    const lead = named ? `Morning ${input.name} — ` : "Morning — ";
+    body = `${lead}today's session:\n\n${headline}${why}`;
+  }
   if (input.icsUrl || input.googleUrl) {
     body += "\n\nAdd to calendar:";
     if (input.icsUrl) body += `\n${input.icsUrl}`;

@@ -352,10 +352,14 @@ export async function processIncomingMessage(
       await db
         .update(athletes)
         .set({
-          reminderPrefs: { enabled: true, time_local: result.time_local },
+          reminderPrefs: {
+            enabled: true,
+            time_local: result.time_local,
+            timing: result.timing,
+          },
         })
         .where(eq(athletes.id, athleteId));
-      replyText = REMINDER_CAPTURED_REPLY(result.time_local);
+      replyText = REMINDER_CAPTURED_REPLY(result.time_local, result.timing);
     } else {
       replyText = REMINDER_AMBIGUOUS_REPLY;
     }

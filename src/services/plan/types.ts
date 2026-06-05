@@ -57,6 +57,11 @@ export type Plan = {
   start_date: string;
   race_date?: string;
   race_name?: string;
+  // F6 (v1.2): one-line statement of the frameworks the plan is built on
+  // (e.g. "Pfitz base→build→peak→taper, 80/20 polarized, 10%-rule"). Shown
+  // first in the summary so the runner sees it's a real, principled plan
+  // without having to ask. Optional — ingested plans may not have one.
+  methodology?: string;
   weeks: PlanWeek[];
   generated_at: string;
 };
@@ -111,6 +116,10 @@ export function parsePlan(raw: unknown): Plan {
       ? obj.race_date.slice(0, 10)
       : undefined;
   const race_name = typeof obj.race_name === "string" ? obj.race_name : undefined;
+  const methodology =
+    typeof obj.methodology === "string" && obj.methodology.trim().length > 0
+      ? obj.methodology.trim()
+      : undefined;
 
   if (!Array.isArray(obj.weeks)) {
     throw new Error("plan: weeks must be an array");
@@ -126,6 +135,7 @@ export function parsePlan(raw: unknown): Plan {
     start_date,
     race_date,
     race_name,
+    methodology,
     weeks,
     generated_at: new Date().toISOString(),
   };
@@ -212,6 +222,11 @@ export function renderPlanSummary(plan: Plan): string {
     ? `${verb} a ${plan.weeks.length}-week plan for ${plan.race_name}`
     : `${verb} a ${plan.weeks.length}-week plan`;
   lines.push(title + (plan.race_date ? ` (${plan.race_date}).` : "."));
+
+  // F6 (v1.2): lead with the method so the runner sees it's principled.
+  if (plan.methodology) {
+    lines.push(`Built on: ${plan.methodology}`);
+  }
 
   // Phase summary if present
   const phases = new Set(plan.weeks.map((w) => w.phase).filter(Boolean));
