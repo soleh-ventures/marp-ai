@@ -203,6 +203,32 @@ The architecture diagram lives in `docs/architecture.md`.
 
 ---
 
+## Daily reminders (no cron needed)
+
+Reminders dispatch **in-process** from the always-on web service: a
+15-minute interval timer inside the running server calls the reminder
+scheduler, which sends a WhatsApp ping to each athlete whose local
+reminder time falls in the current window and who has a training
+session that day.
+
+- **Enabled by default in production.** Override with the
+  `REMINDER_SCHEDULER` env var (`on` / `off`).
+- **Do NOT set a Railway cron schedule on the `marp-ai` service.** A
+  cron schedule turns the always-on web server into a run-to-completion
+  job, which takes the Twilio webhook listener offline and resets the
+  reminder interval on every reboot. If one is set, clear it:
+  **service → Settings → Cron Schedule → remove**.
+- Requires migration `0008` (adds `timezone` + `reminder_prefs`) and
+  athletes who've set a reminder time during onboarding.
+
+The HTTP endpoint `/internal/cron/reminders` (guarded by `CRON_SECRET`)
+still exists as an alternative for external HTTP cron services
+(cron-job.org etc.), and the standalone `bun run reminders:run` script
+works for a dedicated Railway cron *service*. Pick exactly one path —
+in-process is the default and needs no extra wiring.
+
+---
+
 ## Re-deploying
 
 Subsequent deploys: just `git push` to your fork's main branch. Railway auto-deploys.
