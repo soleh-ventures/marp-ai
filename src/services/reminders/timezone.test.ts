@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  extractIanaFromStravaTz,
   inferCountryFromPhone,
   inferTimezoneFromPhone,
   nextMonday,
@@ -97,6 +98,34 @@ describe("nowInZone (F8)", () => {
     const z = nowInZone("Europe/Berlin", "+4915123456789", lateUtc);
     expect(z.date).toBe("2026-06-06");
     expect(z.weekday).toBe("saturday");
+  });
+});
+
+describe("extractIanaFromStravaTz (F8c)", () => {
+  test("pulls the IANA name from a Strava timezone string", () => {
+    expect(extractIanaFromStravaTz("(GMT-05:00) America/New_York")).toBe(
+      "America/New_York",
+    );
+  });
+  test("handles a positive offset", () => {
+    expect(extractIanaFromStravaTz("(GMT+01:00) Europe/Berlin")).toBe(
+      "Europe/Berlin",
+    );
+  });
+  test("accepts a bare IANA name with no offset prefix", () => {
+    expect(extractIanaFromStravaTz("Asia/Tokyo")).toBe("Asia/Tokyo");
+  });
+  test("handles three-segment zones", () => {
+    expect(
+      extractIanaFromStravaTz("(GMT-03:00) America/Argentina/Buenos_Aires"),
+    ).toBe("America/Argentina/Buenos_Aires");
+  });
+  test("rejects a non-IANA / garbage zone", () => {
+    expect(extractIanaFromStravaTz("(GMT+00:00) Narnia/Cair_Paravel")).toBeNull();
+  });
+  test("returns null for non-string / missing input", () => {
+    expect(extractIanaFromStravaTz(undefined)).toBeNull();
+    expect(extractIanaFromStravaTz(42)).toBeNull();
   });
 });
 

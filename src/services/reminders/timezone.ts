@@ -165,6 +165,27 @@ export function resolveTimezone(
   return inferTimezoneFromPhone(phone) ?? "UTC";
 }
 
+// F8c (v1.2): Strava activities carry a `timezone` field shaped like
+// "(GMT-05:00) America/New_York". The IANA name after the offset is far
+// more accurate than the phone dial code for expats/travellers (it's
+// where they actually run). Extract and validate it. Returns null when
+// the string is missing or not a plausible IANA name.
+export function extractIanaFromStravaTz(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  // Take everything after the ")" if present, else the whole string.
+  const afterParen = raw.includes(")") ? raw.slice(raw.indexOf(")") + 1) : raw;
+  const candidate = afterParen.trim();
+  // Plausible IANA: "Region/City", letters/underscores/slashes only.
+  if (!/^[A-Za-z]+\/[A-Za-z_]+(\/[A-Za-z_]+)?$/.test(candidate)) return null;
+  // Final sanity: ask Intl to accept it. Throws on garbage.
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: candidate });
+    return candidate;
+  } catch {
+    return null;
+  }
+}
+
 export type ZonedNow = {
   // YYYY-MM-DD in the resolved timezone.
   date: string;

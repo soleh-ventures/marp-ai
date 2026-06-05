@@ -1,3 +1,4 @@
+import { and, desc, eq } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { activities } from "../db/schema.js";
 import {
@@ -8,6 +9,10 @@ import {
   StravaConnectionRevokedError,
   getFreshAccessToken,
 } from "./strava-tokens.js";
+import {
+  extractIanaFromStravaTz,
+  inferTimezoneFromPhone,
+} from "./reminders/timezone.js";
 
 // Heuristic threshold for tagging an activity as a "long run". Doesn't
 // account for the runner's individual training base — that's done at a
@@ -172,6 +177,40 @@ export async function ingestStravaActivity(
     .returning({ id: activities.id });
 
   return { inserted: inserted.length > 0 };
+}
+
+// F8c (v1.2): the IANA timezone of the runner's most recent activity,
+// read from the stored raw Strava payload. Reflects where they actually
+// trained — accurate for expats/travellers in a way the phone dial code
+// never is. Returns null when no activity has a usable timezone.
+export async function latestActivityTimezone(
+  athleteId: string,
+): Promise<string | null> {
+  const rows = await db
+    .select({ rawPayload: activities.rawPayload })
+    .from(activities)
+    .where(
+      and(eq(activities.athleteId, athleteId), eq(activities.source, "strava")),
+    )
+    .orderBy(desc(activities.startedAt))
+    .limit(1);
+  const raw = rows[0]?.rawPayload as Record<string, unknown> | undefined;
+  if (!raw) return null;
+  return extractIanaFromStravaTz(raw.timezone);
+}
+
+// F8c (v1.2): the best timezone to PERSIST for an athlete, in priority
+// order: Strava-derived (where they run) → phone dial code → null. The
+// caller stores the result; resolveTimezone() then reads it as the
+// authoritative stored value. Async because the Strava lookup hits the
+// DB; phone inference is the cheap fallback when Strava isn't connected.
+export async function bestTimezoneForAthlete(
+  athleteId: string,
+  phone: string,
+): Promise<string | null> {
+  const fromStrava = await latestActivityTimezone(athleteId).catch(() => null);
+  if (fromStrava) return fromStrava;
+  return inferTimezoneFromPhone(phone);
 }
 
 // Exposed for direct testing of the connection lookup path without
