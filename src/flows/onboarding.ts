@@ -82,7 +82,10 @@ export type OnboardingTurnResult = {
 
 export async function runOnboardingTurn(
   athleteId: string,
-  messageId: string,
+  // Nullable: most turns are driven by an inbound message, but onboarding
+  // can also be kicked off out-of-band (e.g. straight after a Strava OAuth
+  // callback, where there's no inbound to attribute the LLM call to).
+  messageId: string | null,
   runnerMessage: string,
 ): Promise<OnboardingTurnResult> {
   // Load current state + recent dialog. We pull dialog directly here
@@ -149,7 +152,7 @@ export async function runOnboardingTurn(
       temperature: 0.3,
       cacheSystem: true,
     },
-    { athleteId, messageId, component: "other" },
+    { athleteId, messageId: messageId ?? undefined, component: "other" },
   );
   const parsed = parseOnboardingResponse(res.text);
 

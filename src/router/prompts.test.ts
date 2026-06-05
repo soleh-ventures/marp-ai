@@ -3,6 +3,8 @@ import {
   _resetPromptCache,
   getClassifierPrompt,
   getDomainPromptFile,
+  getOnboardingPrompt,
+  getPlanGeneratorPrompt,
   getSynthesizerPrompt,
   parseFrontmatter,
   validateAllPrompts,
@@ -80,6 +82,37 @@ describe("prompt files on disk", () => {
     expect(f.body).toMatch(/green|🟢/i);
     expect(f.body).toMatch(/yellow|🟡/i);
     expect(f.body).toMatch(/red|🔴/i);
+  });
+
+  // Regression: the v1.2 single-message rewrite dropped sex/height/weight
+  // from the asked question while leaving them in the `basics` schema, so
+  // they were never actually collected. The onboarding message must ask for
+  // them and the plan generator must actually consume them — otherwise
+  // they're dead schema again.
+  test("onboarding prompt asks for sex, height, and weight", () => {
+    const body = getOnboardingPrompt();
+    // Must be in the asked QUESTION (a numbered "N. Your ..." list item),
+    // not merely listed in the `- **basics**:` schema block — the v1.2 bug
+    // was that the schema kept them while the question dropped them.
+    const numberedItems = body
+      .split("\n")
+      .filter((l) => /^\s*>?\s*\d+\.\s/.test(l))
+      .join("\n")
+      .toLowerCase();
+    expect(numberedItems).toContain("sex");
+    expect(numberedItems).toContain("height");
+    expect(numberedItems).toContain("weight");
+  });
+
+  test("plan-generator prompt uses sex/height/weight physiology", () => {
+    const body = getPlanGeneratorPrompt().toLowerCase();
+    // The dedicated physiology rule must reference all three inputs.
+    expect(body).toContain("weight");
+    expect(body).toContain("height");
+    expect(body).toContain("sex");
+    // And tie weight to a concrete coaching lever (load and/or fueling),
+    // not just mention it in passing.
+    expect(body).toMatch(/bmi|fuel|load/);
   });
 
   test("every domain prompt has a 'Cite the principle' section (ET18 / CEO S1)", () => {

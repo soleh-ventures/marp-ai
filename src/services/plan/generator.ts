@@ -46,19 +46,41 @@ export async function generatePlan(input: GeneratePlanInput): Promise<Plan> {
     `# Athlete context\n${memory.text}\n\n` +
     `# Task\nBuild a complete periodised plan for this runner. Return ONLY the JSON described in your instructions — no markdown, no commentary.`;
 
-  const res = await llmCall(
-    {
-      model: config.llm.domainModel,
-      system: getPlanGeneratorPrompt(),
-      user: userPayload,
-      maxTokens: 4000,
-      temperature: 0.4,
-      cacheSystem: true,
-    },
-    { athleteId: input.athleteId, messageId: input.messageId, component: "domain" },
-  );
+  // A full 16-week periodised plan (up to 7 sessions/week, each with a
+  // description + reasoning line) runs well past 4000 output tokens — the
+  // old cap truncated the JSON mid-array, parsePlanResponse threw, and the
+  // runner saw "couldn't build the plan this turn". 16000 comfortably fits
+  // the longest plan the prompt will produce (capped at 16 weeks). We only
+  // pay for tokens actually emitted, so the headroom is free.
+  const callOnce = () =>
+    llmCall(
+      {
+        model: config.llm.domainModel,
+        system: getPlanGeneratorPrompt(),
+        user: userPayload,
+        maxTokens: 16000,
+        temperature: 0.4,
+        cacheSystem: true,
+      },
+      { athleteId: input.athleteId, messageId: input.messageId, component: "domain" },
+    );
 
-  const plan = parsePlanResponse(res.text);
+  // One-shot retry: a malformed/truncated first response is usually
+  // transient (a stray prose preamble, an over-long week). Re-asking once
+  // recovers far more often than not, and keeps the runner from hitting the
+  // generic failure message on a recoverable blip. Bounded at 1 for
+  // predictable latency/cost.
+  let plan: Plan;
+  try {
+    plan = parsePlanResponse((await callOnce()).text);
+  } catch (firstErr) {
+    console.error(
+      "plan-generator: first attempt failed, retrying once:",
+      (firstErr as Error).message,
+    );
+    plan = parsePlanResponse((await callOnce()).text);
+  }
+
   // Authoritative override — the start_date is computed in code, not
   // trusted from the LLM. Keeps week-1 anchored to the real next Monday.
   plan.start_date = startDate;
