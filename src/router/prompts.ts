@@ -146,6 +146,11 @@ export function getPlanIngestPrompt(): string {
   return loadFile("plan-ingest.md").body;
 }
 
+// v1.3 (A1): targeted-mutation prompt for editing an existing plan.
+export function getPlanAdjustPrompt(): string {
+  return loadFile("plan-adjust.md").body;
+}
+
 export function getDomainPromptFile(domain: Domain): PromptFile {
   return loadFile(`domains/${domain}.md`);
 }
@@ -159,6 +164,7 @@ export function validateAllPrompts(): void {
   loadFile("onboarding.md");
   loadFile("plan-generator.md");
   loadFile("plan-ingest.md");
+  loadFile("plan-adjust.md");
   for (const d of DOMAINS) {
     loadFile(`domains/${d}.md`);
   }

@@ -55,7 +55,9 @@ export async function generatePlan(input: GeneratePlanInput): Promise<Plan> {
   const callOnce = () =>
     llmCall(
       {
-        model: config.llm.domainModel,
+        // v1.3 (D2): first creation runs on planModel (Opus once the eval
+        // gates it; Sonnet by default). Adjustments use domainModel.
+        model: config.llm.planModel,
         system: getPlanGeneratorPrompt(),
         user: userPayload,
         maxTokens: 16000,

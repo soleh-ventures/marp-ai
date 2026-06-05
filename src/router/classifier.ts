@@ -20,6 +20,7 @@ const FALLBACK_ROUTING: Routing = {
   confidence: 0,
   rationale: "classifier fallback (unparseable response)",
   complexity: "coaching",
+  planEdit: false,
   isFork: false,
   resolvesDecision: null,
 };
@@ -103,6 +104,10 @@ export function parseRouting(raw: string): Routing {
   const rationale =
     typeof obj.rationale === "string" ? obj.rationale : "";
   const complexity = obj.complexity === "simple" ? "simple" : "coaching";
+  // v1.3 (A2): plan-edit intent. Only an explicit true routes to the plan
+  // mutation path; anything else stays false so a coaching question is
+  // never treated as an edit.
+  const planEdit = obj.plan_edit === true;
   // ET5: new fields. Default to safe values when the LLM doesn't emit
   // them (e.g. older prompts in flight during a deploy) — isFork false
   // means the rest of the pipeline runs unchanged, resolvesDecision null
@@ -122,6 +127,7 @@ export function parseRouting(raw: string): Routing {
     confidence,
     rationale,
     complexity,
+    planEdit,
     isFork,
     resolvesDecision,
   };

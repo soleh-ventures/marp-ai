@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   formatShortDate,
   parsePlan,
+  renderOpenQuestions,
   renderPlanForContext,
   renderPlanSummary,
   sessionDate,
@@ -166,6 +167,31 @@ describe("renderPlanSummary", () => {
   test("F6: omits the methodology line when absent", () => {
     const plan = parsePlan(validPlan);
     expect(renderPlanSummary(plan)).not.toContain("Method:");
+  });
+});
+
+describe("open_questions (v1.3 A3)", () => {
+  test("parses, trims, and caps at 3", () => {
+    const plan = parsePlan({
+      ...validPlan,
+      open_questions: [" long run Saturday? ", "Tuesday intervals ok?", "", "more mileage?", "fourth?"],
+    });
+    expect(plan.open_questions).toEqual([
+      "long run Saturday?",
+      "Tuesday intervals ok?",
+      "more mileage?",
+    ]);
+  });
+
+  test("is undefined when absent or all-empty", () => {
+    expect(parsePlan(validPlan).open_questions).toBeUndefined();
+    expect(parsePlan({ ...validPlan, open_questions: ["", "  "] }).open_questions).toBeUndefined();
+  });
+
+  test("renderOpenQuestions returns a bulleted tail when present, '' when absent", () => {
+    const withQs = parsePlan({ ...validPlan, open_questions: ["Saturday long run?"] });
+    expect(renderOpenQuestions(withQs)).toContain("• Saturday long run?");
+    expect(renderOpenQuestions(parsePlan(validPlan))).toBe("");
   });
 });
 

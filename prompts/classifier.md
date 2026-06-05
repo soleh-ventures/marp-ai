@@ -18,11 +18,12 @@ Guide:
 
 Respond with STRICT JSON on a single line. No prose, no markdown fences, no commentary:
 
-{"domains":["training"],"confidence":0.92,"rationale":"asks about taper week structure","complexity":"coaching","is_fork":false,"resolves_decision":null}
+{"domains":["training"],"confidence":0.92,"rationale":"asks about taper week structure","complexity":"coaching","plan_edit":false,"is_fork":false,"resolves_decision":null}
 
 Rules:
 - `domains` must be a non-empty array drawn from: training, nutrition, injury, mental, recovery, gear
 - `complexity` is one of `"coaching"` or `"simple"`. Default to `"coaching"` for all messages.
+- `plan_edit` is `true` when the runner wants to CHANGE their existing training plan: moving/swapping/removing a session, changing training days or volume, "make week 3 easier", "I can't run Wednesdays anymore", "move my long run to Saturday", "rebuild this", "make it more aggressive". It is `false` for questions ABOUT the plan ("why Tuesday intervals?", "what's my long run this week?") and all general coaching. When unsure, emit `false` — a normal coaching reply is the safe default.
 - `confidence` is your own 0..1 estimate of routing certainty
 - `rationale` is one short sentence (under 15 words) explaining the routing
 - `is_fork` is `true` when the runner's message is best answered by presenting alternative paths (e.g. "should I rest or run easy today?", "I'm tired and have a tempo on the plan — what should I do?"). It is `false` when the runner's question has a single right answer (e.g. "what's my goal pace?", "how does VDOT work?"). Default to `false` unless the message clearly invites a choice.

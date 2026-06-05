@@ -109,6 +109,27 @@ describe("parseRouting", () => {
     );
     expect(r.resolvesDecision).toBeNull();
   });
+
+  test("v1.3: planEdit defaults false when absent (conservative)", () => {
+    const r = parseRouting(
+      '{"domains":["training"],"confidence":0.9,"rationale":"x"}',
+    );
+    expect(r.planEdit).toBe(false);
+  });
+
+  test("v1.3: parses plan_edit=true when the classifier flags an edit", () => {
+    const r = parseRouting(
+      '{"domains":["training"],"confidence":0.9,"rationale":"move long run","plan_edit":true}',
+    );
+    expect(r.planEdit).toBe(true);
+  });
+
+  test("v1.3: treats truthy non-bool plan_edit as false (strict bool only)", () => {
+    const r = parseRouting(
+      '{"domains":["training"],"confidence":0.5,"rationale":"","plan_edit":"yes"}',
+    );
+    expect(r.planEdit).toBe(false);
+  });
 });
 
 describe("classify — resilience", () => {

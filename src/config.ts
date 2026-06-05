@@ -50,6 +50,12 @@ export const config = {
     classifierModel: process.env.LLM_CLASSIFIER_MODEL ?? "claude-haiku-4-5",
     domainModel: process.env.LLM_DOMAIN_MODEL ?? "claude-sonnet-4-6",
     synthesizerModel: process.env.LLM_SYNTHESIZER_MODEL ?? "claude-sonnet-4-6",
+    // v1.3 (D2): model for FIRST plan creation — the highest-leverage,
+    // once-per-user call. Defaults to Sonnet so Phase 1 ships with no cost
+    // change; flip to an Opus id via LLM_PLAN_MODEL once the Sonnet-vs-Opus
+    // eval (T5) confirms the quality delta is real. Plan ADJUSTMENTS stay on
+    // domainModel (Sonnet) — smaller, more frequent, lower-stakes.
+    planModel: process.env.LLM_PLAN_MODEL ?? "claude-sonnet-4-6",
     // Binder runs on every free-form fork reply. Separate var so we can
     // tune classifier ↔ binder independently (eng review CQ1).
     binderModel: process.env.LLM_BINDER_MODEL ?? "claude-haiku-4-5",

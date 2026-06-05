@@ -25,6 +25,11 @@ export type Routing = {
   confidence: number;
   rationale: string;
   complexity: Complexity;
+  // v1.3 (A2): the runner is asking to change their existing training plan
+  // ("move my long run to Saturday", "I can't run Wednesdays", "make week 3
+  // easier"). Routed to adjustPlan, not the expert router. Defaults false —
+  // conservative, so a coaching question is never mistaken for a plan edit.
+  planEdit: boolean;
   // ET5: the runner's message likely needs the reply to present a fork
   // (alternative paths). Domain / synth will emit a decision_frame in
   // their output when this is true.
@@ -81,4 +86,8 @@ export type RouterInput = {
   // Memory-layer context (T7). For T5 this is just an optional string blob
   // that gets prepended to every domain prompt. T7 will give it structure.
   contextSummary?: string;
+  // v1.3 (A2): a routing already produced by the caller. When the caller
+  // classified up front (e.g. process-incoming checking plan_edit), pass it
+  // here so route() doesn't pay for a second classifier call.
+  precomputedRouting?: Routing;
 };
