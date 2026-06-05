@@ -18,13 +18,7 @@ export function isDomain(s: string): s is Domain {
 // Routing decision produced by the classifier. `confidence` is the
 // classifier's self-reported certainty (0..1) — useful for surfacing
 // "I'm not sure I understand" handoffs in T9 onboarding.
-// F4-a (v1.2): coarse complexity tier driving model selection.
-//   small_talk — greetings, thanks, acks, logistics; no coaching needed.
-//                Answered by a single cheap Haiku reply, no expert pipeline.
-//   simple / coaching — a real question; runs the full Sonnet pipeline.
-// Defaults to "coaching" when absent — conservative escalation means a
-// real question never gets mis-tiered down to the cheap path.
-export type Complexity = "small_talk" | "simple" | "coaching";
+export type Complexity = "simple" | "coaching";
 
 export type Routing = {
   domains: Domain[];
