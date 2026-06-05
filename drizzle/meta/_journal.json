@@ -64,6 +64,13 @@
       "when": 1780550467468,
       "tag": "0008_calm_shocker",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1780658257418,
+      "tag": "0009_curvy_the_professor",
+      "breakpoints": true
     }
   ]
 }

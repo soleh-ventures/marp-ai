@@ -4,6 +4,7 @@ import { athletes } from "../db/schema.js";
 import { config } from "../config.js";
 import { buildMagicLinkUrl } from "./strava-magic-link.js";
 import { findByAthleteId } from "./strava-connections.js";
+import { inferCountryFromPhone } from "./reminders/timezone.js";
 
 // Pre-onboarding consent gate (GDPR Article 6 lawful basis).
 //
@@ -77,13 +78,15 @@ export async function buildConsentAcceptedReply(
       "automatically — no need to retype the last few weeks. Tap the link " +
       "(expires in 5 min):\n\n" +
       linkUrl +
-      "\n\nPrefer to skip Strava? Just reply with your name and what race " +
-      "or goal you're training for — we can start that way too."
+      "\n\nPrefer to skip Strava? Just reply and I'll grab a few quick " +
+      "details to build your plan."
     );
   }
+  // F2-b: stay neutral — the onboarder sends the single compact question
+  // on the next turn, so we don't pre-ask specific fields here (that would
+  // double-ask).
   return (
-    "You're in. I'll ask a few quick questions to get your context, then we can dive in.\n\n" +
-    "First — what's your name and what race or goal are you training for?"
+    "You're in. Reply and I'll grab a few quick details to build your plan."
   );
 }
 
@@ -141,8 +144,17 @@ export function classifyConsentReply(body: string): ConsentDecision {
 }
 
 export async function recordConsentGranted(athleteId: string): Promise<void> {
+  // F8b (v1.2): capture the runner's country from their phone dial code
+  // at consent time — the earliest reliable point, so we get the insight
+  // dimension even for runners who drop off before generating a plan.
+  const [row] = await db
+    .select({ phone: athletes.phone })
+    .from(athletes)
+    .where(eq(athletes.id, athleteId))
+    .limit(1);
+  const country = row?.phone ? inferCountryFromPhone(row.phone) : null;
   await db
     .update(athletes)
-    .set({ consentGrantedAt: new Date() })
+    .set({ consentGrantedAt: new Date(), ...(country ? { country } : {}) })
     .where(eq(athletes.id, athleteId));
 }

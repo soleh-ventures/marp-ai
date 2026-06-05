@@ -32,7 +32,12 @@ import {
   classifyPrefsReply,
   isPrefsAsked,
 } from "./reminders/prefs.js";
-import { inferTimezoneFromPhone } from "./reminders/timezone.js";
+import { bestTimezoneForAthlete } from "./strava-activities.js";
+import {
+  applyTimezoneOverride,
+  extractTimezoneFromMessage,
+  looksLikeTimezoneChange,
+} from "./timezone-override.js";
 import {
   buildConnectReply,
   buildOnboardingStravaOffer,
@@ -289,6 +294,9 @@ export async function processIncomingMessage(
   // frames in v1 — onboarding / Strava-connect / dormancy / erasure
   // prompts are single-answer.
   let routerFrame: DecisionFrame | null = null;
+  // F8d: holds the IANA tz extracted from a location-change message, when
+  // the timezone-override branch fires (assigned in its else-if condition).
+  let tzOverride: string | null = null;
   if (looksLikeDeletionRequest(body)) {
     // First-phase deletion request — reply with the confirmation prompt
     // regardless of onboarding state. The deletion-confirmation branch
@@ -361,7 +369,8 @@ export async function processIncomingMessage(
     if (result.ok) {
       await saveAthletePlan(athleteId, result.plan);
       const updatedHistory = withPivotState(history, "done");
-      const tz = inferTimezoneFromPhone(athleteRow.phone);
+      // F8c: Strava-derived tz (where they run) beats the phone dial code.
+      const tz = await bestTimezoneForAthlete(athleteId, athleteRow.phone);
       await db
         .update(athletes)
         .set({
@@ -401,7 +410,8 @@ export async function processIncomingMessage(
         const plan = await generatePlan({ athleteId, messageId });
         await saveAthletePlan(athleteId, plan);
         const updatedHistory = withPivotState(history, "done");
-        const tz = inferTimezoneFromPhone(athleteRow.phone);
+        // F8c: Strava-derived tz (where they run) beats the phone dial code.
+        const tz = await bestTimezoneForAthlete(athleteId, athleteRow.phone);
         await db
           .update(athletes)
           .set({
@@ -432,6 +442,20 @@ export async function processIncomingMessage(
       replyText = result.finalText.trim();
       routerFrame = result.frame;
     }
+  } else if (
+    looksLikeTimezoneChange(body) &&
+    (tzOverride = await extractTimezoneFromMessage({
+      athleteId,
+      messageId,
+      body,
+    })) !== null
+  ) {
+    // F8d: runner is correcting their location ("I live in NYC actually" /
+    // "I'm in Tokyo this week"). Update the stored timezone so reminders
+    // and training dates land in the right frame. If extraction returns
+    // null (e.g. "I'm in pain"), the && short-circuits and we fall
+    // through to normal routing — no message gets swallowed.
+    replyText = await applyTimezoneOverride(athleteId, tzOverride);
   } else if (looksLikeStravaConnect(body)) {
     // Explicit Strava connect intent — skip the expert router and reply
     // with the magic link directly. No LLM call needed.

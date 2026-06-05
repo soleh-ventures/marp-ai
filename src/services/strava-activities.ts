@@ -1,3 +1,4 @@
+import { and, desc, eq, gte } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { activities } from "../db/schema.js";
 import {
@@ -8,6 +9,10 @@ import {
   StravaConnectionRevokedError,
   getFreshAccessToken,
 } from "./strava-tokens.js";
+import {
+  extractIanaFromStravaTz,
+  inferTimezoneFromPhone,
+} from "./reminders/timezone.js";
 
 // Heuristic threshold for tagging an activity as a "long run". Doesn't
 // account for the runner's individual training base — that's done at a
@@ -172,6 +177,75 @@ export async function ingestStravaActivity(
     .returning({ id: activities.id });
 
   return { inserted: inserted.length > 0 };
+}
+
+// F8c (v1.2): the IANA timezone of the runner's most recent activity,
+// read from the stored raw Strava payload. Reflects where they actually
+// trained — accurate for expats/travellers in a way the phone dial code
+// never is. Returns null when no activity has a usable timezone.
+export async function latestActivityTimezone(
+  athleteId: string,
+): Promise<string | null> {
+  const rows = await db
+    .select({ rawPayload: activities.rawPayload })
+    .from(activities)
+    .where(
+      and(eq(activities.athleteId, athleteId), eq(activities.source, "strava")),
+    )
+    .orderBy(desc(activities.startedAt))
+    .limit(1);
+  const raw = rows[0]?.rawPayload as Record<string, unknown> | undefined;
+  if (!raw) return null;
+  return extractIanaFromStravaTz(raw.timezone);
+}
+
+// F8c (v1.2): the best timezone to PERSIST for an athlete, in priority
+// order: Strava-derived (where they run) → phone dial code → null. The
+// caller stores the result; resolveTimezone() then reads it as the
+// authoritative stored value. Async because the Strava lookup hits the
+// DB; phone inference is the cheap fallback when Strava isn't connected.
+export async function bestTimezoneForAthlete(
+  athleteId: string,
+  phone: string,
+): Promise<string | null> {
+  const fromStrava = await latestActivityTimezone(athleteId).catch(() => null);
+  if (fromStrava) return fromStrava;
+  return inferTimezoneFromPhone(phone);
+}
+
+// F3 (v1.2): a one-line fitness summary from the runner's recent runs,
+// so onboarding can SKIP asking for weekly mileage / longest run when we
+// already have the data. Looks at the last 28 days of run activities.
+// Returns null when there's nothing to summarise (not connected, or no
+// runs yet) — caller then asks the fitness questions as normal.
+export async function summarizeRecentTraining(
+  athleteId: string,
+): Promise<{ weeklyKm: number; longestKm: number } | null> {
+  const since = new Date(Date.now() - 28 * 24 * 60 * 60 * 1000);
+  const rows = await db
+    .select({ metrics: activities.metrics })
+    .from(activities)
+    .where(
+      and(
+        eq(activities.athleteId, athleteId),
+        eq(activities.discipline, "run"),
+        gte(activities.startedAt, since),
+      ),
+    );
+  if (rows.length === 0) return null;
+  let totalM = 0;
+  let longestM = 0;
+  for (const r of rows) {
+    const m = (r.metrics as Record<string, unknown> | null) ?? {};
+    const dist = typeof m.distance_m === "number" ? m.distance_m : 0;
+    totalM += dist;
+    if (dist > longestM) longestM = dist;
+  }
+  if (totalM === 0) return null;
+  return {
+    weeklyKm: Math.round(totalM / 1000 / 4),
+    longestKm: Math.round(longestM / 1000),
+  };
 }
 
 // Exposed for direct testing of the connection lookup path without
