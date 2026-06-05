@@ -120,6 +120,57 @@ describe("getMemoryContext", () => {
     expect(ctx.recentMessageCount).toBe(0);
   });
 
+  test("anchors the context with a 'Today' line so the LLM knows the date/weekday", async () => {
+    const [a] = await db
+      .insert(athletes)
+      .values({ phone: "+15551110009", name: "Dated", timezone: "Asia/Jakarta" })
+      .returning();
+    if (!a) throw new Error("insert failed");
+    const ctx = await getMemoryContext(a.id);
+    // First line is the date anchor, with the resolved timezone + a
+    // capitalised weekday.
+    expect(ctx.text.split("\n")[0]).toMatch(
+      /^Today: \d{4}-\d{2}-\d{2} \([A-Z][a-z]+\), timezone Asia\/Jakarta$/,
+    );
+  });
+
+  test("renders a stored plan with real calendar dates instead of raw JSON", async () => {
+    const plan = {
+      version: 1,
+      source: "generated",
+      start_date: "2026-06-08",
+      race_name: "Berlin Marathon",
+      generated_at: new Date().toISOString(),
+      weeks: [
+        {
+          index: 1,
+          phase: "base",
+          total_km: 35,
+          sessions: [
+            { day_of_week: "tuesday", type: "easy", description: "6K easy Z2" },
+          ],
+        },
+      ],
+    };
+    const [a] = await db
+      .insert(athletes)
+      .values({
+        phone: "+15551110010",
+        name: "Planned",
+        athleticHistory: { years_running: 4, plan },
+      })
+      .returning();
+    if (!a) throw new Error("insert failed");
+    const ctx = await getMemoryContext(a.id);
+    // Dated rendering present...
+    expect(ctx.text).toContain("Training plan");
+    expect(ctx.text).toContain("Tue, 9 Jun: easy — 6K easy Z2");
+    // ...and the plan is NOT dumped as raw JSON inside athletic history.
+    expect(ctx.text).not.toContain('"day_of_week"');
+    // Non-plan history fields still surface.
+    expect(ctx.text).toContain("years_running");
+  });
+
   test("includes only UNRESOLVED active flags", async () => {
     const [a] = await db
       .insert(athletes)

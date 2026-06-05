@@ -212,49 +212,148 @@ function parseSession(
   return { day_of_week, type, distance_km, duration_min, description, reasoning };
 }
 
-// Compact human-readable summary for the WhatsApp reply that follows
-// generation / ingest. Goal: runner reads it in under 30 seconds and
-// can spot anything that doesn't match their reality.
+// --- Calendar-date helpers ---
+//
+// A plan stores sessions as weekday strings (day_of_week) anchored to
+// start_date (week-1's Monday, a local calendar date). The runner thinks
+// in dates, not "week 4, Wednesday", and MARP must be able to map a
+// weekday to a real date without doing arithmetic the LLM gets wrong.
+// These helpers resolve every session to a concrete YYYY-MM-DD.
+
+const DOW_INDEX: Record<DayOfWeek, number> = {
+  monday: 0,
+  tuesday: 1,
+  wednesday: 2,
+  thursday: 3,
+  friday: 4,
+  saturday: 5,
+  sunday: 6,
+};
+
+// YYYY-MM-DD for a session. Pure calendar math on a UTC-midnight anchor —
+// we only ever read Y-M-D back out (never a wall-clock time), so DST and
+// timezone can't skew the result.
+export function sessionDate(
+  startDate: string,
+  weekIndex: number,
+  day: DayOfWeek,
+): string {
+  const base = new Date(`${startDate}T00:00:00Z`);
+  if (Number.isNaN(base.getTime())) return startDate;
+  const offset = (Math.max(1, weekIndex) - 1) * 7 + DOW_INDEX[day];
+  base.setUTCDate(base.getUTCDate() + offset);
+  return base.toISOString().slice(0, 10);
+}
+
+// "Mon 8 Jun" (or "Mon 8 Jun 2026" with year). Formatted in UTC so the
+// printed day matches the calendar date exactly, regardless of server tz.
+export function formatShortDate(isoDate: string, withYear = false): string {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return isoDate;
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "UTC",
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    ...(withYear ? { year: "numeric" } : {}),
+  }).format(d);
+}
+
+// Sessions in calendar order (Mon→Sun), each as a dated one-liner the
+// runner can act on: "Tue 9 Jun — Easy 8K @ 5:40/km Z2".
+function renderWeekDays(plan: Plan, week: PlanWeek): string[] {
+  return [...week.sessions]
+    .sort((a, b) => DOW_INDEX[a.day_of_week] - DOW_INDEX[b.day_of_week])
+    .map((s) => {
+      const date = formatShortDate(sessionDate(plan.start_date, week.index, s.day_of_week));
+      return `  ${date} — ${s.description}`;
+    });
+}
+
+// Human-readable summary for the WhatsApp reply that follows generation /
+// ingest. Goal: the runner reads it in under 30 seconds, sees the shape of
+// the block, AND sees their actual first week laid out day-by-day with real
+// dates — so nothing is ambiguous and they can spot anything that's off.
 export function renderPlanSummary(plan: Plan): string {
   const lines: string[] = [];
   const verb = plan.source === "ingested" ? "Captured" : "Built";
-  const title = plan.race_name
-    ? `${verb} a ${plan.weeks.length}-week plan for ${plan.race_name}`
-    : `${verb} a ${plan.weeks.length}-week plan`;
-  lines.push(title + (plan.race_date ? ` (${plan.race_date}).` : "."));
+  const raceBit = plan.race_name ? ` for ${plan.race_name}` : "";
+  const raceDay = plan.race_date
+    ? ` — race day ${formatShortDate(plan.race_date, true)}`
+    : "";
+  lines.push(`${verb} your ${plan.weeks.length}-week plan${raceBit}${raceDay}.`);
 
   // F6 (v1.2): lead with the method so the runner sees it's principled.
   if (plan.methodology) {
-    lines.push(`Built on: ${plan.methodology}`);
+    lines.push(`Method: ${plan.methodology}`);
   }
 
-  // Phase summary if present
-  const phases = new Set(plan.weeks.map((w) => w.phase).filter(Boolean));
-  if (phases.size > 0) {
-    lines.push(`Phases: ${[...phases].join(" → ")}.`);
-  }
-
-  // Peak week
+  // Shape line: phases + peak week, when we have them.
+  const shapeBits: string[] = [];
+  const phases = [...new Set(plan.weeks.map((w) => w.phase).filter(Boolean))];
+  if (phases.length > 0) shapeBits.push(phases.join(" → "));
   const withKm = plan.weeks.filter((w) => typeof w.total_km === "number");
   if (withKm.length > 0) {
     const peak = withKm.reduce((max, w) => (w.total_km! > max.total_km! ? w : max));
-    lines.push(`Peak week ${peak.index}: ${peak.total_km}km.`);
+    shapeBits.push(`peak week ${peak.index} at ${peak.total_km}km`);
   }
+  if (shapeBits.length > 0) lines.push(`Shape: ${shapeBits.join(" · ")}.`);
 
-  // Sample week 1 sessions
+  // Week 1, laid out day-by-day with real dates — the part the runner
+  // actually starts on. Rest days included so the week reads as a whole.
   const w1 = plan.weeks[0];
   if (w1) {
-    const sampleSessions = w1.sessions
-      .filter((s) => s.type !== "rest")
-      .slice(0, 3)
-      .map((s) => `${s.day_of_week.slice(0, 3)} ${s.description}`);
-    if (sampleSessions.length > 0) {
-      lines.push(`Week 1: ${sampleSessions.join(" · ")}.`);
-    }
+    const km = typeof w1.total_km === "number" ? `, ${w1.total_km}km` : "";
+    const phase = w1.phase ? `${w1.phase}${km}` : km.replace(/^, /, "");
+    const head = phase ? `Week 1 (${phase})` : "Week 1";
+    const starts = `starts ${formatShortDate(plan.start_date)}`;
+    lines.push("");
+    lines.push(`${head} — ${starts}:`);
+    lines.push(...renderWeekDays(plan, w1));
   }
 
   lines.push("");
+  if (plan.weeks.length > 1) {
+    lines.push(
+      `${plan.weeks.length} weeks in total — ask me about any week and I'll walk you through it.`,
+    );
+  }
   lines.push("Look right? If anything's off, just tell me what to change.");
 
   return lines.join("\n");
+}
+
+// Dated, weekday-anchored rendering of the whole plan for the LLM's working
+// memory. Replaces dumping the plan as raw JSON: every session carries its
+// real calendar date, so when the runner asks "what's on today / tomorrow /
+// this week" MARP reads the answer off concrete dates instead of doing
+// weekday arithmetic (which LLMs get wrong).
+export function renderPlanForContext(plan: Plan): string {
+  const header: string[] = [];
+  const raceBit = plan.race_name ? `, ${plan.race_name}` : "";
+  const raceDay = plan.race_date
+    ? `, race ${formatShortDate(plan.race_date, true)}`
+    : "";
+  header.push(`Training plan (${plan.weeks.length} weeks${raceBit}${raceDay}).`);
+  if (plan.methodology) header.push(`Method: ${plan.methodology}`);
+
+  const weekBlocks = plan.weeks.map((w) => {
+    const start = formatShortDate(sessionDate(plan.start_date, w.index, "monday"));
+    const end = formatShortDate(sessionDate(plan.start_date, w.index, "sunday"));
+    const meta: string[] = [];
+    if (w.phase) meta.push(w.phase);
+    if (typeof w.total_km === "number") meta.push(`${w.total_km}km`);
+    const metaStr = meta.length > 0 ? ` ${meta.join(", ")}` : "";
+    const focus = w.focus ? ` — ${w.focus}` : "";
+    const days = [...w.sessions]
+      .sort((a, b) => DOW_INDEX[a.day_of_week] - DOW_INDEX[b.day_of_week])
+      .map((s) => {
+        const date = formatShortDate(sessionDate(plan.start_date, w.index, s.day_of_week));
+        return `    ${date}: ${s.type} — ${s.description}`;
+      })
+      .join("\n");
+    return `  Week ${w.index} [${start}–${end}]${metaStr}${focus}:\n${days}`;
+  });
+
+  return `${header.join(" ")}\n${weekBlocks.join("\n")}`;
 }
