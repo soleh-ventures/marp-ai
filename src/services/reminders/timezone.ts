@@ -191,6 +191,9 @@ export type ZonedNow = {
   date: string;
   // Lowercase weekday name, e.g. "friday".
   weekday: string;
+  // RC2 (v1.3): HH:MM (24-hour) clock time in the resolved timezone. Without
+  // this the coaching LLM has the date but invents the time ("late morning").
+  time: string;
   // The IANA timezone actually used (after resolution).
   timezone: string;
 };
@@ -209,6 +212,7 @@ export function nowInZone(
   const timezone = resolveTimezone(storedTz, phone);
   let date: string;
   let weekday: string;
+  let time: string;
   try {
     date = new Intl.DateTimeFormat("en-CA", {
       timeZone: timezone,
@@ -222,6 +226,13 @@ export function nowInZone(
     })
       .format(now)
       .toLowerCase();
+    // en-GB gives 24-hour "HH:MM"; hourCycle h23 avoids "24:xx" at midnight.
+    time = new Intl.DateTimeFormat("en-GB", {
+      timeZone: timezone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).format(now);
   } catch {
     // Bad timezone string — fall back to UTC rather than throw.
     date = now.toISOString().slice(0, 10);
@@ -231,8 +242,9 @@ export function nowInZone(
     })
       .format(now)
       .toLowerCase();
+    time = now.toISOString().slice(11, 16);
   }
-  return { date, weekday, timezone };
+  return { date, weekday, time, timezone };
 }
 
 // F8 (v1.2): the Monday on-or-after a given instant, in the resolved

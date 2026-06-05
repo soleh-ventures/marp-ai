@@ -78,18 +78,21 @@ describe("nowInZone (F8)", () => {
   // Fixed instant: 2026-06-05T08:40:00Z — Friday in Berlin (UTC+2 → 10:40).
   const fri = new Date("2026-06-05T08:40:00Z");
 
-  test("computes date + weekday in the resolved zone", () => {
+  test("computes date + weekday + time in the resolved zone", () => {
     const z = nowInZone("Europe/Berlin", "+4915123456789", fri);
     expect(z.date).toBe("2026-06-05");
     expect(z.weekday).toBe("friday");
     expect(z.timezone).toBe("Europe/Berlin");
+    // 08:40Z is 10:40 in Berlin (UTC+2 summer).
+    expect(z.time).toBe("10:40");
   });
 
-  test("crosses the date line correctly for a far-east zone", () => {
+  test("crosses the date line + clock for a far-east zone", () => {
     // 08:40Z is 17:40 in Tokyo, still Friday the 5th.
     const z = nowInZone("Asia/Tokyo", "+819012345678", fri);
     expect(z.date).toBe("2026-06-05");
     expect(z.weekday).toBe("friday");
+    expect(z.time).toBe("17:40");
   });
 
   test("a late-evening Berlin instant is still the local day, not UTC next-day", () => {
