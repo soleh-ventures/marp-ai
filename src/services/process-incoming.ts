@@ -400,7 +400,17 @@ export async function processIncomingMessage(
         "into clear week sections (Week 1, Week 2…) and resend? Or reply " +
         "'build it' and I'll build one from scratch.";
     }
-  } else if (isAwaitingPivotChoice(lastOutboundBody, history)) {
+  } else if (
+    isAwaitingPivotChoice(lastOutboundBody, history) ||
+    // RC1 (v1.3): resilience fallback. An onboarded runner with NO stored
+    // plan who clearly expresses build/BYO intent ("build training plan",
+    // "make me a plan", "I have a plan") gets handled even if the formal
+    // awaiting_choice state was lost (e.g. they asked questions first, so
+    // the pivot prompt is no longer the last outbound). Without this, clear
+    // build intent rotted in the expert router, which improvised a plan in
+    // prose and never called generatePlan. "other" still routes onward.
+    (!getStoredPlan(history) && classifyPivotReply(body) !== "other")
+  ) {
     // V5: runner is responding to the post-onboarding pivot.
     // Classify a/b; on "other", fall through to the expert router so
     // a free-form question never traps the runner inside the pivot.

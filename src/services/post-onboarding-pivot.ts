@@ -75,11 +75,16 @@ const BYO_DESCRIPTIVE = [
   /\bbring\s+(my|own)\b/i,
 ];
 
+// RC1: target PLAN building specifically. The old pattern required an
+// article right after the verb so "build training plan" missed; the naive
+// fix ("build my …") wrongly caught coaching questions like "build my base".
+// So: a build verb tied to "plan", or "build/make it/one" (the plan in
+// pivot context), or "from scratch", or "you build".
 const BUILD_DESCRIPTIVE = [
-  /\b(build|make|create|design)\s+(one|a|me|the|it)\b/i,
+  /\b(build|make|create|design|generate)\b.{0,25}\bplan\b/i,
+  /\b(build|make|create|generate)\s+(it|one)\b/i,
   /\bfrom\s+scratch\b/i,
   /\byou\s+(build|make|create|design)\b/i,
-  /\bgenerate\b.{0,15}\bplan\b/i,
 ];
 
 // Selection filler — words people wrap around the option letter when
