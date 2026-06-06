@@ -18,6 +18,7 @@
 import { config } from "../../config.js";
 import { getSafetyTriagePrompt } from "../../router/prompts.js";
 import { llmCall } from "../llm-call.js";
+import { combineTriage, screenDeterministic } from "./deterministic.js";
 
 export type SafetyTier = "emergency" | "referral" | "none";
 
@@ -35,7 +36,16 @@ export async function triageSafety(
 ): Promise<SafetyTriage> {
   if (!message.trim()) return SAFE_DEFAULT;
 
-  for (let attempt = 0; attempt < 2; attempt++) {
+  // Layer 1 — deterministic floor. Runs with no LLM, so it holds even if
+  // the model below is wrong or unavailable. Can only escalate the tier.
+  const floor = screenDeterministic(message);
+
+  // Layer 2 — the LLM classifier adds recall on top. One retry, then we
+  // fall back to the deterministic floor (NOT to "none") so a failing
+  // classifier can never strip the guardrail on a clear crisis message.
+  let llmResult: SafetyTriage = SAFE_DEFAULT;
+  let llmOk = false;
+  for (let attempt = 0; attempt < 2 && !llmOk; attempt++) {
     try {
       const res = await llmCall(
         {
@@ -52,19 +62,23 @@ export async function triageSafety(
           component: "classifier",
         },
       );
-      return parseTriage(res.text);
+      llmResult = parseTriage(res.text);
+      llmOk = true;
     } catch (err) {
       console.error(
-        `safety-triage: attempt ${attempt + 1}/2 failed:`,
+        `safety-triage: LLM attempt ${attempt + 1}/2 failed:`,
         (err as Error).message,
       );
     }
   }
-  // Both attempts failed. Fail to "none" so the runner still gets a reply,
-  // but make it loud — a persistently failing safety classifier is an
-  // operational incident, not a silent degradation.
-  console.error("safety-triage: FAILED twice, defaulting to none (no triage applied)");
-  return SAFE_DEFAULT;
+  if (!llmOk) {
+    console.error(
+      `safety-triage: LLM failed twice; relying on deterministic floor (tier=${floor.tier})`,
+    );
+  }
+
+  // Take the higher severity of the two layers.
+  return combineTriage(floor, llmResult);
 }
 
 const VALID_TIERS: ReadonlySet<string> = new Set([
