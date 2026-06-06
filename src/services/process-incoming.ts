@@ -11,6 +11,7 @@ import { route } from "../router/index.js";
 import { classify } from "../router/classifier.js";
 import { triageSafety } from "./safety/triage.js";
 import { alertOperator } from "./safety/alert.js";
+import { recordSafetyEvent } from "./safety/events.js";
 import { emergencyResponse, referralPrefixFor } from "./safety/responses.js";
 import { sendWhatsApp, TwilioSendError } from "./twilio-send.js";
 import { fireThinkingAck } from "./thinking-ack.js";
@@ -132,8 +133,13 @@ export async function processIncomingMessage(
   // coaching reply. A Tier-1 red flag lets the normal flow run but
   // prepends a hard referral to whatever reply gets built.
   const triage = await triageSafety(body, { athleteId, messageId });
-  if (triage.tier === "emergency") {
+  if (triage.tier !== "none") {
+    // S4: durable audit + operator alert for both tiers. Best-effort —
+    // these never block or alter the runner's reply.
+    await recordSafetyEvent(athleteId, messageId, triage, body);
     await alertOperator(athleteId, triage, body);
+  }
+  if (triage.tier === "emergency") {
     await sendAndPersist(
       athleteId,
       athleteRow.phone,

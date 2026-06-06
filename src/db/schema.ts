@@ -221,6 +221,37 @@ export const messages = pgTable(
   (t) => [index("messages_athlete_received_idx").on(t.athleteId, t.receivedAt)],
 );
 
+// ─── safety_events (S4 / KER-32) ──────────────────────────────────────────
+//
+// One row per Tier-0 (emergency) or Tier-1 (referral) triage hit. The
+// liability audit trail and the improvement signal for the safety
+// classifier. Written best-effort — a failure here NEVER affects the
+// runner's reply. message_id is SET NULL on message delete so an
+// erasure cascade can clear the link without losing the safety record.
+export const safetyEvents = pgTable(
+  "safety_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    athleteId: uuid("athlete_id")
+      .notNull()
+      .references(() => athletes.id, { onDelete: "cascade" }),
+    messageId: uuid("message_id").references((): AnyPgColumn => messages.id, {
+      onDelete: "set null",
+    }),
+    // "emergency" | "referral" — stored as text (no enum) so the tier
+    // vocabulary can evolve with the classifier without a migration.
+    tier: text("tier").notNull(),
+    category: text("category").notNull(),
+    reason: text("reason"),
+    // First ~280 chars of the inbound message, for audit context.
+    messageExcerpt: text("message_excerpt"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index("safety_events_athlete_idx").on(t.athleteId, t.createdAt)],
+);
+
 // ─── pending_decisions (ET8: binder chain) ────────────────────────────────
 //
 // When a domain or synthesizer reply contains a fork ("you could do A
