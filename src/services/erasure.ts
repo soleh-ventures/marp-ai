@@ -31,8 +31,14 @@ export type EraseResult = {
 export async function deleteAthlete(
   athleteId: string,
 ): Promise<EraseResult> {
-  // Scrub PII text from this athlete's llm_calls rows first — once the
-  // athlete row is gone, athlete_id is SET NULL and we lose the handle.
+  // Scrub PII text from this athlete's llm_calls rows first, THEN delete
+  // the athlete. Ordering matters: once the athlete row is gone, the FK
+  // SET NULLs athlete_id and we lose the handle to find their rows. The
+  // failure direction is safe — if the process dies between the two
+  // statements, the PII is already gone and a retry finishes the delete.
+  // (We intentionally don't wrap these in db.transaction: it's the only
+  // transaction in the codebase and interacts badly with the postgres-js
+  // pool under test. Revisit if a transactional erasure is ever needed.)
   await db
     .update(llmCalls)
     .set({ inputUser: null, outputText: null })

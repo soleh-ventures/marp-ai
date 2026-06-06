@@ -30,9 +30,14 @@ export type CallContext = {
 const IO_TEXT_CAP = 100_000;
 
 function capText(s: string): string {
-  return s.length > IO_TEXT_CAP
-    ? `${s.slice(0, IO_TEXT_CAP)}…[truncated ${s.length - IO_TEXT_CAP} chars]`
-    : s;
+  if (s.length <= IO_TEXT_CAP) return s;
+  let end = IO_TEXT_CAP;
+  // Don't cut through a surrogate pair (e.g. an emoji): a lone high
+  // surrogate is invalid UTF-8 and Postgres rejects it. Back off one
+  // char if the boundary char is a leading surrogate.
+  const code = s.charCodeAt(end - 1);
+  if (code >= 0xd800 && code <= 0xdbff) end -= 1;
+  return `${s.slice(0, end)}…[truncated ${s.length - end} chars]`;
 }
 
 // Every LLM call in the app goes through this wrapper. It exists for one

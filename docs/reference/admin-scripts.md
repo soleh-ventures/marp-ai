@@ -107,7 +107,7 @@ bun run admin:delete-athlete <athlete-uuid> --yes     # skip prompt (scripts)
 | `messages` | CASCADE | rows deleted |
 | `strava_connections` | CASCADE | rows deleted |
 | `pending_decisions` | CASCADE | rows deleted |
-| `llm_calls` | SET NULL on athlete_id + message_id | rows survive, anonymised — preserves aggregate cost telemetry |
+| `llm_calls` | SET NULL on athlete_id + message_id; `input_user`/`output_text` scrubbed to NULL | rows survive anonymised — cost telemetry preserved, PII prompt/reply text removed |
 | `processed_messages` | (no FK) | not affected; Twilio SIDs survive |
 
 ### Examples

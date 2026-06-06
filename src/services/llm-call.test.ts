@@ -82,4 +82,22 @@ describe("llmCall — I/O capture for answer-quality debugging", () => {
     // Capped at 100k + the marker suffix, never the full 120k.
     expect((rows[0]?.inputUser?.length ?? 0)).toBeLessThan(120_000);
   });
+
+  test("does not cut through a surrogate pair (emoji) at the cap boundary", async () => {
+    // Place a 2-code-unit emoji straddling the 100k boundary: 99_999 filler
+    // chars, then "😀" (code units 100_000 + 100_001). A naive slice(0,100k)
+    // would keep only the leading surrogate and produce invalid UTF-8.
+    const withEmoji = `${"x".repeat(99_999)}😀${"y".repeat(50_000)}`;
+    mockProvider.setResponses([{ match: /.*/, text: "ok" }]);
+    await llmCall(
+      { model: "mock", system: "sys", user: withEmoji, maxTokens: 10 },
+      { component: "other" },
+    );
+    const rows = await db.select().from(llmCalls);
+    const stored = rows[0]?.inputUser ?? "";
+    // The stored text must be valid (round-trips through Postgres without
+    // throwing) and must not end in a lone leading surrogate.
+    const lastChar = stored.charCodeAt(stored.indexOf("…") - 1);
+    expect(lastChar >= 0xd800 && lastChar <= 0xdbff).toBe(false);
+  });
 });
