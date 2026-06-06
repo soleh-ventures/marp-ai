@@ -2,6 +2,13 @@
 builder = "NIXPACKS"
 
 [deploy]
+# Run pending DB migrations before the new release goes live. Runs after
+# build, inside Railway's network (internal DATABASE_URL resolves), and
+# blocks the cutover if it fails — so a bad migration aborts the deploy
+# instead of crashing the running app. Migrations must stay backward-
+# compatible (expand/contract): additive first, so old + new code both
+# work against the migrated schema during the brief overlap.
+preDeployCommand = "bun run db:migrate"
 startCommand = "bun run start"
 healthcheckPath = "/health"
 healthcheckTimeout = 30

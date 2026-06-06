@@ -75,7 +75,20 @@ The redeploy after editing `TWILIO_PUBLIC_WEBHOOK_BASE` is required — Strava's
 
 ## Step 4: Run the database migrations
 
-Migrations don't auto-run on deploy. From your local terminal:
+**Migrations run automatically on every deploy.** `railway.toml` sets
+`preDeployCommand = "bun run db:migrate"`, which Railway runs after the build
+and before the new release goes live. It executes inside Railway's network, so
+the internal `DATABASE_URL` resolves, and if a migration fails the deploy aborts
+instead of cutting over to an app that crashes on a missing column. Keep
+migrations backward-compatible (expand/contract: additive changes first) so the
+old and new code both work against the migrated schema during the brief overlap.
+
+You normally don't run migrations by hand. The two cases where you still might:
+
+- **First-ever deploy**, before the app image exists, or
+- **Out-of-band** — applying a migration to prod without shipping code.
+
+From your local terminal:
 
 ```bash
 railway link                                              # pick the project + service
@@ -236,7 +249,7 @@ Subsequent deploys: just `git push` to your fork's main branch. Railway auto-dep
 After a deploy that:
 
 - Changes `TWILIO_PUBLIC_WEBHOOK_BASE` → re-run `strava:bootstrap`
-- Adds a new migration → run `bun run db:migrate` (or `railway run -- bun run db:migrate`)
+- Adds a new migration → nothing to do; `preDeployCommand` applies it automatically before cutover
 - Changes prompts in `prompts/` → no extra step; they're read at request time (with an in-process cache)
 
 ---
