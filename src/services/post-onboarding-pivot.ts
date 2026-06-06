@@ -36,13 +36,15 @@ export type PivotState =
 // Embedded literally in the wrap-up message; matched against
 // lastOutbound. Keep short and stable — a rephrase here changes the
 // detection behaviour.
-export const PIVOT_QUESTION_SIGNATURE = "Just reply (a) or (b).";
+export const PIVOT_QUESTION_SIGNATURE = "Reply (a) or (b) to start";
 
 export const PIVOT_QUESTION =
-  "\n\nTwo ways to start:\n" +
-  "(a) You already have a training plan and want me to coach you through it\n" +
-  "(b) You'd like me to build one from scratch\n" +
-  PIVOT_QUESTION_SIGNATURE;
+  "\n\nLast thing before we start — your training plan. Two options:\n" +
+  "(a) You already have one → paste it and I'll coach you through it\n" +
+  "(b) I build you a fresh plan, tailored to everything you just told me\n\n" +
+  "👉 " +
+  PIVOT_QUESTION_SIGNATURE +
+  ". Not sure? Go with (b) — that's what most runners pick.";
 
 export const PIVOT_REPLY_BYO =
   "Great — paste your plan in chat. Week-by-week or a summary both work; " +
