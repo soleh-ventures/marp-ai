@@ -9,6 +9,9 @@ import {
 import { getMemoryContext } from "../memory/retrieve.js";
 import { route } from "../router/index.js";
 import { classify } from "../router/classifier.js";
+import { triageSafety } from "./safety/triage.js";
+import { alertOperator } from "./safety/alert.js";
+import { emergencyResponse, referralPrefixFor } from "./safety/responses.js";
 import { sendWhatsApp, TwilioSendError } from "./twilio-send.js";
 import { fireThinkingAck } from "./thinking-ack.js";
 import {
@@ -112,6 +115,7 @@ export async function processIncomingMessage(
         lastSeenAt: athletes.lastSeenAt,
         consentGrantedAt: athletes.consentGrantedAt,
         reminderPrefs: athletes.reminderPrefs,
+        country: athletes.country,
       })
       .from(athletes)
       .where(eq(athletes.id, athleteId))
@@ -121,6 +125,23 @@ export async function processIncomingMessage(
     console.error(`processIncoming: athlete ${athleteId} not found, dropping reply`);
     return;
   }
+
+  // S1 (KER-29): safety triage runs FIRST, on every inbound, before any
+  // onboarding/coaching/command logic. A Tier-0 emergency short-circuits
+  // to a scripted, region-aware response + operator alert — never an LLM
+  // coaching reply. A Tier-1 red flag lets the normal flow run but
+  // prepends a hard referral to whatever reply gets built.
+  const triage = await triageSafety(body, { athleteId, messageId });
+  if (triage.tier === "emergency") {
+    await alertOperator(athleteId, triage, body);
+    await sendAndPersist(
+      athleteId,
+      athleteRow.phone,
+      emergencyResponse(athleteRow.country),
+    );
+    return;
+  }
+  const safetyReferral = referralPrefixFor(triage);
 
   // Single lookup of the previous outbound — used by the dormancy and
   // erasure branches to detect "the runner is responding to a prompt
@@ -603,10 +624,15 @@ export async function processIncomingMessage(
     return;
   }
 
+  // S1: a Tier-1 referral prepends a hard referral to whatever reply the
+  // normal flow produced (onboarding, coaching, pivot, etc.). Emergencies
+  // already short-circuited above and never reach here.
+  const finalReply = safetyReferral + replyText;
+
   const { outboundMessageId } = await sendAndPersist(
     athleteId,
     athleteRow.phone,
-    replyText,
+    finalReply,
   );
 
   // ET6 + ET8: record the pending decision after we have the outbound
