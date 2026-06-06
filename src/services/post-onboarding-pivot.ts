@@ -44,7 +44,8 @@ export const PIVOT_QUESTION =
   "(b) I build you a fresh plan, tailored to everything you just told me\n\n" +
   "👉 " +
   PIVOT_QUESTION_SIGNATURE +
-  ". Not sure? Go with (b) — that's what most runners pick.";
+  ".\nNot sure? Go with (b) — I've just got your goal, fitness, and injury " +
+  "history, so I can build a plan around you specifically, not a generic template.";
 
 export const PIVOT_REPLY_BYO =
   "Great — paste your plan in chat. Week-by-week or a summary both work; " +
