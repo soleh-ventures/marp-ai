@@ -145,6 +145,26 @@ describe("getMemoryContext", () => {
     expect(ctx.text.toLowerCase()).toContain("reminder");
   });
 
+  test("S2: under-18 age injects the minor SAFEGUARD line", async () => {
+    const [a] = await db
+      .insert(athletes)
+      .values({ phone: "+15551110011", name: "Teen", athleticHistory: { age: 15 } })
+      .returning();
+    if (!a) throw new Error("insert failed");
+    const ctx = await getMemoryContext(a.id);
+    expect(ctx.text).toContain("SAFEGUARD — this runner is under 18");
+  });
+
+  test("S2: an adult age does NOT inject the safeguard", async () => {
+    const [a] = await db
+      .insert(athletes)
+      .values({ phone: "+15551110012", name: "Adult", athleticHistory: { age: 34 } })
+      .returning();
+    if (!a) throw new Error("insert failed");
+    const ctx = await getMemoryContext(a.id);
+    expect(ctx.text).not.toContain("SAFEGUARD");
+  });
+
   test("renders a stored plan with real calendar dates instead of raw JSON", async () => {
     const plan = {
       version: 1,

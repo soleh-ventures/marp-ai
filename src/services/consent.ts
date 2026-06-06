@@ -45,6 +45,9 @@ export const PRIVACY_NOTICE =
   "Hi — welcome to MARP. Before we start, a quick honest note:\n\n" +
   "I save your messages, runs, and profile so I can coach you over time. " +
   "It's encrypted, stays with us, and never gets sold to anyone.\n\n" +
+  "One more thing: I'm an AI running coach, not a doctor. Nothing I say is " +
+  "medical advice — for injuries, pain, or any health concern, please see a " +
+  "qualified professional.\n\n" +
   "You can text \"delete my account\" anytime — instant wipe, no questions.\n\n" +
   "Reply YES to start. Reply STOP if this isn't for you.";
 
