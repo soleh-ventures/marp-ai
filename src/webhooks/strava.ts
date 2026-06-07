@@ -160,6 +160,19 @@ async function handleActivityEvent(event: StravaEvent): Promise<void> {
       `aspect=${event.aspect_type} inserted=${result.inserted}` +
       `${result.reason ? ` reason=${result.reason}` : ""}`,
   );
+
+  // M1 (T2/T3): only a genuinely NEW activity triggers the post-run pipeline
+  // (analysis + check-in). Redelivered `update` events that hit ON CONFLICT
+  // DO NOTHING return inserted=false and are skipped — no duplicate check-ins.
+  // The pipeline is fault-isolated internally; runs inside this same
+  // fire-and-forget task so tests' pendingStravaWork() awaits it.
+  if (result.inserted && result.athleteId && result.activityId) {
+    const { runPostRunPipeline } = await import("../services/run-analysis.js");
+    await runPostRunPipeline({
+      athleteId: result.athleteId,
+      activityId: result.activityId,
+    });
+  }
 }
 
 // Validate the event's subscription_id against the one we registered

@@ -151,6 +151,11 @@ export function getPlanAdjustPrompt(): string {
   return loadFile("plan-adjust.md").body;
 }
 
+// M1 (T2): interprets a completed run into a short coach's read.
+export function getPostRunAnalysisPrompt(): string {
+  return loadFile("post-run-analysis.md").body;
+}
+
 export function getDomainPromptFile(domain: Domain): PromptFile {
   return loadFile(`domains/${domain}.md`);
 }
@@ -165,6 +170,7 @@ export function validateAllPrompts(): void {
   loadFile("plan-generator.md");
   loadFile("plan-ingest.md");
   loadFile("plan-adjust.md");
+  loadFile("post-run-analysis.md");
   for (const d of DOMAINS) {
     loadFile(`domains/${d}.md`);
   }
