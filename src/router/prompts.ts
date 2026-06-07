@@ -166,6 +166,11 @@ export function getRetroProposalPrompt(): string {
   return loadFile("retro-proposal.md").body;
 }
 
+// S1 (KER-29): safety-triage classifier prompt, run before routing.
+export function getSafetyTriagePrompt(): string {
+  return loadFile("safety-triage.md").body;
+}
+
 export function getDomainPromptFile(domain: Domain): PromptFile {
   return loadFile(`domains/${domain}.md`);
 }
@@ -183,6 +188,7 @@ export function validateAllPrompts(): void {
   loadFile("post-run-analysis.md");
   loadFile("feeling-extract.md");
   loadFile("retro-proposal.md");
+  loadFile("safety-triage.md");
   for (const d of DOMAINS) {
     loadFile(`domains/${d}.md`);
   }

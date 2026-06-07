@@ -62,8 +62,9 @@ src/
   webhooks/     Twilio + Strava webhook handlers
   routes/      Strava OAuth start + callback
   services/    Business logic — process-incoming orchestrator, consent,
-              binder, flag-detector, erasure, dormancy, Strava (OAuth,
-              tokens, activities, backfill, subscriptions), ingest helpers
+              safety (triage + deterministic floor, run first on every
+              message), binder, flag-detector, erasure, dormancy, Strava
+              (OAuth, tokens, activities, backfill, subscriptions), ingest
   router/      Classifier + domain runner + synthesizer + decision-frame
   memory/      getMemoryContext + block summarization
   ingest/      File upload (GPX) parser

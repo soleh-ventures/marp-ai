@@ -60,6 +60,12 @@ export const config = {
     // tune classifier ↔ binder independently (eng review CQ1).
     binderModel: process.env.LLM_BINDER_MODEL ?? "claude-haiku-4-5",
   },
+  safety: {
+    // S1 (KER-29): when a Tier-0 emergency is triaged, best-effort alert
+    // to this operator WhatsApp number (e.g. "whatsapp:+49…"). Unset in
+    // dev/test; full event logging + alerting lands in S4.
+    operatorPhone: process.env.SAFETY_OPERATOR_PHONE ?? "",
+  },
   strava: {
     clientId: process.env.STRAVA_CLIENT_ID ?? "",
     clientSecret: process.env.STRAVA_CLIENT_SECRET ?? "",

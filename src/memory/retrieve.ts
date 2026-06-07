@@ -333,6 +333,27 @@ export function formatContext(input: FormatInput): string {
       "say you can't send reminders or scheduled messages.",
   );
 
+  // S2 (KER-30): age gate for minors. When the captured age is under 18,
+  // hard-block weight/calorie/body-composition and menstrual-cycle content
+  // — this line goes to every coaching domain, the synthesizer, AND the
+  // plan generator (all read getMemoryContext).
+  // Review (adversarial): coerce — the LLM extractor sometimes emits age as
+  // a string ("17"). typeof === "number" alone would silently skip the gate
+  // for a minor. Number() handles both; NaN/0/missing → no gate (can't gate
+  // an unknown age).
+  const ageRaw = (input.athleticHistory as Record<string, unknown> | null)?.age;
+  const ageVal =
+    typeof ageRaw === "number" || typeof ageRaw === "string" ? Number(ageRaw) : NaN;
+  if (Number.isFinite(ageVal) && ageVal > 0 && ageVal < 18) {
+    parts.push(
+      "SAFEGUARD — this runner is under 18. Do NOT give weight-loss, " +
+        "calorie-counting, body-composition, or menstrual-cycle advice, even " +
+        "if asked. Keep coaching to training, technique, enjoyment, and simply " +
+        "eating enough to fuel their running. If they raise those topics, " +
+        "gently redirect and suggest talking to a parent/guardian or a doctor.",
+    );
+  }
+
   // Athletic history JSON — but strip out the plan, which we render
   // separately below with real calendar dates. Dumping the plan as JSON
   // forces the LLM to do weekday math; the dated rendering does not.
