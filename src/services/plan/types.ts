@@ -267,18 +267,25 @@ export function sessionDate(
   return base.toISOString().slice(0, 10);
 }
 
-// "Mon 8 Jun" (or "Mon 8 Jun 2026" with year). Formatted in UTC so the
+// "Mon, 8 Jun" (or "Mon, 8 Jun 2026" with year). Read in UTC so the
 // printed day matches the calendar date exactly, regardless of server tz.
+//
+// Formatted from fixed abbreviation tables rather than Intl.DateTimeFormat:
+// the comma separator in en-GB short-date output is ICU-version-dependent
+// (Linux/CI emits "Mon, 8 Jun", some macOS/Bun ICU builds emit "Mon 8 Jun"),
+// which made the output non-deterministic across environments. Building the
+// string by hand pins it so tests and production agree everywhere.
+const WEEKDAY_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+const MONTH_ABBR = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+] as const;
+
 export function formatShortDate(isoDate: string, withYear = false): string {
   const d = new Date(`${isoDate}T00:00:00Z`);
   if (Number.isNaN(d.getTime())) return isoDate;
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: "UTC",
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    ...(withYear ? { year: "numeric" } : {}),
-  }).format(d);
+  const base = `${WEEKDAY_ABBR[d.getUTCDay()]}, ${d.getUTCDate()} ${MONTH_ABBR[d.getUTCMonth()]}`;
+  return withYear ? `${base} ${d.getUTCFullYear()}` : base;
 }
 
 // Sessions in calendar order (Mon→Sun), each as a dated one-liner the
