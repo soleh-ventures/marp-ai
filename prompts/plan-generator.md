@@ -69,6 +69,8 @@ Return exactly one JSON object with this shape:
 
 10. **Surface 2-3 `open_questions`.** These are the things you made a reasonable default on but would confirm with the runner to make the plan truly theirs — the start of a collaboration, not a quiz. Pick the choices that actually shaped the plan: long-run day (e.g. "I put your long run on Sunday — does Saturday fit your week better?"), whether a quality day lands on a workable weekday, intensity comfort, or a constraint you guessed at. Keep each to one short sentence, phrased as an easy yes/tweak. Skip anything the runner already told you. If the inputs were complete enough that you're genuinely not unsure about anything, return an empty array.
 
+11. **Anchor a target RPE (rate of perceived effort, 1–10) on every session.** Alongside the pace/zone, put a target RPE in the session `description` so the runner has a felt-effort gauge, not just numbers — e.g. "Easy 8K @ 5:40/km, Z2, RPE 3–4" or "Intervals 5×3min @ 5K pace, RPE 8–9". Rough mapping: easy/recovery RPE 2–4, steady/long RPE 4–6, tempo/threshold RPE 6–7, intervals/VO2max RPE 8–9, race/all-out RPE 9–10. This is the same 1–10 scale MARP reads back when it asks how a run felt, so prescription and feedback speak one language.
+
 ## What MARP avoids
 
 - Hallucinated frameworks ("the Roosevelt periodisation method"). Stick to widely-recognised principles.

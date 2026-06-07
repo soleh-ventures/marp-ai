@@ -115,6 +115,14 @@ describe("prompt files on disk", () => {
     expect(body).toMatch(/bmi|fuel|load/);
   });
 
+  // M1 (T7): prescription must carry a target RPE (1-10) so it speaks the
+  // same effort language MARP reads back in the post-run feeling capture.
+  test("plan-generator prompt anchors a target RPE on sessions", () => {
+    const body = getPlanGeneratorPrompt().toLowerCase();
+    expect(body).toContain("rpe");
+    expect(body).toMatch(/1[\s–-]*10|perceived/);
+  });
+
   test("every domain prompt has a 'Cite the principle' section (ET18 / CEO S1)", () => {
     // E14 content-licensing guard: each domain MUST instruct the LLM to
     // cite the underlying principle when making strong recommendations.
