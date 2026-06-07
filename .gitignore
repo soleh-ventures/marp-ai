@@ -7,3 +7,6 @@ dist/
 .DS_Store
 bun.lockb
 .bun/
+
+# Local gstack artifacts (security reports, etc.) — never commit
+.gstack/

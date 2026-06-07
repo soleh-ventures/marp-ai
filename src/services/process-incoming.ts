@@ -60,6 +60,9 @@ import {
 import { recordFrame } from "./pending-decisions.js";
 import { bindReply } from "./binder.js";
 import { detectFlags } from "./flag-detector.js";
+import { extractRunFeeling } from "./run-feeling.js";
+import { applyProposalResolution } from "./run-retro.js";
+import type { BindResult } from "./binder.js";
 import { autoTransitionStaleBlocks } from "../memory/summarize.js";
 import { ingestFileFromMediaUrl } from "../ingest/file.js";
 import {
@@ -275,12 +278,21 @@ export async function processIncomingMessage(
   // Run in parallel — they touch different tables and don't observe
   // each other. Errors are swallowed; a failed flag-detect or bind
   // shouldn't block the reply.
-  await Promise.all([
-    bindReply(athleteId, messageId, body).catch((err) => {
+  const [bindRes] = await Promise.all([
+    bindReply(athleteId, messageId, body).catch((err): BindResult => {
       console.error("binder threw:", err);
+      return { resolved: false };
     }),
     detectFlags(athleteId, messageId, body).catch((err) => {
       console.error("flag-detector threw:", err);
+    }),
+    // M1 (T4): capture how the runner's recent run FELT into a structured
+    // RunFeeling. Cost-guarded — only calls the LLM when there's a run in the
+    // last 48h for the feeling to attach to, so this is a cheap no-op the rest
+    // of the time. Pain is recorded in the feeling; the injury active_flag is
+    // left to the flag-detector above (no duplicate flags).
+    extractRunFeeling({ athleteId, messageId, body }).catch((err) => {
+      console.error("run-feeling threw:", err);
     }),
     // T8: detect active race blocks past their race_date + grace and
     // transition + summarize them. Cheap when there's nothing to do
@@ -290,6 +302,20 @@ export async function processIncomingMessage(
       console.error("autoTransitionStaleBlocks threw:", err);
     }),
   ]);
+
+  // M1 (T6): if the binder just resolved a frame that belongs to a retro
+  // proposal, apply (accept) or decline the plan change. No-op for ordinary
+  // conversational forks. Runs after the batch so the resolution is committed.
+  if (bindRes.resolved) {
+    await applyProposalResolution({
+      athleteId,
+      messageId,
+      frameId: bindRes.frameId,
+      key: bindRes.key,
+    }).catch((err) => {
+      console.error("proposal apply threw:", err);
+    });
+  }
 
   const history = getAthleticHistory(athleteRow.athleticHistory);
 

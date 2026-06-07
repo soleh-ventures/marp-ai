@@ -23,6 +23,7 @@
 
 import { config } from "../../config.js";
 import { runReminderScheduler } from "./scheduler.js";
+import { runWeeklyRetroSweep } from "../run-retro.js";
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let running = false;
@@ -41,6 +42,17 @@ async function tick(): Promise<void> {
     }
   } catch (err) {
     console.error("reminder tick failed:", (err as Error).message);
+  }
+  // M1 (T5): weekly retro sweep rides the same tick. Idempotent per athlete-
+  // week, so the many Sunday ticks collapse to one proposal. Independent
+  // try/catch — a reminder failure must not skip the retro and vice-versa.
+  try {
+    const retro = await runWeeklyRetroSweep({ now: new Date() });
+    if (retro.proposed > 0) {
+      console.log(`weekly retro: ${JSON.stringify(retro)}`);
+    }
+  } catch (err) {
+    console.error("weekly retro sweep failed:", (err as Error).message);
   } finally {
     running = false;
   }

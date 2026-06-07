@@ -391,3 +391,124 @@ export const stravaWebhookConfig = pgTable("strava_webhook_config", {
     .notNull()
     .defaultNow(),
 });
+
+// ─── activity_analyses (M1 — adaptive coaching brain, KER-60) ───────────────
+//
+// One row per analyzed activity. Holds BOTH halves of the post-run signal,
+// each independently nullable because they arrive on different paths:
+//
+//   objective ← post-run analysis (T2), the coach's read of the data
+//   feeling   ← RunFeeling extraction (T4), the runner's reply to the check-in
+//   coachRead ← the one-line fusion, written once both are in
+//
+// The check-in is DECOUPLED from analysis (eng-review decision 4A): a feeling
+// reply can land even if analysis failed, and vice-versa. So whichever path
+// fires first creates the row (upsert keyed by activity_id) and the other
+// fills its column later. activity_id is unique → exactly one canonical
+// analysis per run.
+//
+// onDelete cascade on both FKs: an analysis is meaningless without its
+// activity, and GDPR erasure of the athlete must take it too.
+
+export const activityAnalyses = pgTable(
+  "activity_analyses",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    athleteId: uuid("athlete_id")
+      .notNull()
+      .references(() => athletes.id, { onDelete: "cascade" }),
+    activityId: uuid("activity_id")
+      .notNull()
+      .references(() => activities.id, { onDelete: "cascade" }),
+    // Objective coach-read from the analysis: per-km pattern, split-based
+    // drift, etc. (streams-based zone distribution is deferred to M2). NULL
+    // until analysis runs.
+    objective: jsonb("objective"),
+    // Subjective RunFeeling: { effort: {rpe?, band}, energy, pain, adherence,
+    // context, verbatim }. NULL until the runner answers (or volunteers a
+    // feeling). Shape owned by the extraction service (T4).
+    feeling: jsonb("feeling"),
+    // One-line fusion of objective + subjective. NULL until both are present.
+    coachRead: text("coach_read"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // One canonical analysis per activity — both T2 and T4 upsert onto it.
+    uniqueIndex("activity_analyses_activity_idx").on(t.activityId),
+    // The weekly retro's hot read: "this athlete's analyses this week."
+    index("activity_analyses_athlete_created_idx").on(
+      t.athleteId,
+      t.createdAt,
+    ),
+  ],
+);
+
+// ─── plan_adjustments (M1 — adaptive coaching brain, KER-60) ────────────────
+//
+// The proactive weekly retro's proposal/apply log. Doubles as the retro's
+// IDEMPOTENCY record: the weekly sweep proposes at most once per athlete per
+// training week (the twilio-webhook-idempotency lesson applied to a scheduled
+// mutation — a doubled plan change is worse than a missed one).
+//
+// Lifecycle: proposed → applied | declined | expired | superseded.
+// The plan itself still lives on athletes.athletic_history.plan (the
+// race_blocks migration stays deferred); this table is only the change log.
+
+export const planAdjustmentTriggerEnum = pgEnum("plan_adjustment_trigger", [
+  "weekly_sweep",
+  "event",
+]);
+
+export const planAdjustmentStatusEnum = pgEnum("plan_adjustment_status", [
+  "proposed",
+  "applied",
+  "declined",
+  "expired",
+  "superseded",
+]);
+
+export const planAdjustments = pgTable(
+  "plan_adjustments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    athleteId: uuid("athlete_id")
+      .notNull()
+      .references(() => athletes.id, { onDelete: "cascade" }),
+    // What fired this proposal: the scheduled weekly sweep, or an event-driven
+    // trigger from a strong post-run signal (injury / high RPE / HR drift).
+    trigger: planAdjustmentTriggerEnum("trigger").notNull(),
+    status: planAdjustmentStatusEnum("status").notNull().default("proposed"),
+    // The Monday (YYYY-MM-DD, athlete-local) of the training week this
+    // proposal targets — the idempotency dimension for the weekly sweep.
+    weekStart: text("week_start").notNull(),
+    // The proposed change: structured diff + rationale + the decision_frame
+    // shown to the runner. Shape owned by the retro service (T5).
+    proposal: jsonb("proposal").notNull(),
+    // Links to the binder's pending_decision so the confirm→apply path (T6)
+    // resolves the proposal when the runner replies. SET NULL on decision
+    // delete — the adjustment record survives as audit.
+    pendingDecisionId: uuid("pending_decision_id").references(
+      () => pendingDecisions.id,
+      { onDelete: "set null" },
+    ),
+    appliedAt: timestamp("applied_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // History / hot read: an athlete's recent adjustments.
+    index("plan_adjustments_athlete_created_idx").on(t.athleteId, t.createdAt),
+    // Idempotency: at most one weekly_sweep proposal per (athlete, week).
+    // Event-driven proposals are exempt — real mid-week signals can fire more
+    // than once — so the unique index is partial on trigger = 'weekly_sweep'.
+    uniqueIndex("plan_adjustments_weekly_idem_idx")
+      .on(t.athleteId, t.weekStart)
+      .where(sql`${t.trigger} = 'weekly_sweep'`),
+  ],
+);

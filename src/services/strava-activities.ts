@@ -136,7 +136,14 @@ async function fetchStravaActivity(
 export async function ingestStravaActivity(
   stravaAthleteId: number,
   activityId: number,
-): Promise<{ inserted: boolean; reason?: string }> {
+): Promise<{
+  inserted: boolean;
+  reason?: string;
+  // M1 (T2/T3): on a NEW insert, the ids the webhook needs to fire the
+  // post-run pipeline (analysis + check-in). Absent on no-op redeliveries.
+  athleteId?: string;
+  activityId?: string;
+}> {
   const conn = await findByStravaAthleteId(stravaAthleteId);
   if (!conn) {
     return { inserted: false, reason: "no_connection" };
@@ -158,7 +165,7 @@ export async function ingestStravaActivity(
   const raw = await fetchStravaActivity(accessToken, activityId);
   const norm = normalizeStravaActivity(raw);
 
-  const inserted = await db
+  const insertedRows = await db
     .insert(activities)
     .values({
       athleteId: conn.athleteId,
@@ -176,7 +183,9 @@ export async function ingestStravaActivity(
     })
     .returning({ id: activities.id });
 
-  return { inserted: inserted.length > 0 };
+  const newId = insertedRows[0]?.id;
+  if (!newId) return { inserted: false };
+  return { inserted: true, athleteId: conn.athleteId, activityId: newId };
 }
 
 // F8c (v1.2): the IANA timezone of the runner's most recent activity,

@@ -151,6 +151,21 @@ export function getPlanAdjustPrompt(): string {
   return loadFile("plan-adjust.md").body;
 }
 
+// M1 (T2): interprets a completed run into a short coach's read.
+export function getPostRunAnalysisPrompt(): string {
+  return loadFile("post-run-analysis.md").body;
+}
+
+// M1 (T4): extracts a structured RunFeeling from a runner's free-text reply.
+export function getFeelingExtractPrompt(): string {
+  return loadFile("feeling-extract.md").body;
+}
+
+// M1 (T5): decides whether the week warrants a plan adjustment and proposes one.
+export function getRetroProposalPrompt(): string {
+  return loadFile("retro-proposal.md").body;
+}
+
 export function getDomainPromptFile(domain: Domain): PromptFile {
   return loadFile(`domains/${domain}.md`);
 }
@@ -165,6 +180,9 @@ export function validateAllPrompts(): void {
   loadFile("plan-generator.md");
   loadFile("plan-ingest.md");
   loadFile("plan-adjust.md");
+  loadFile("post-run-analysis.md");
+  loadFile("feeling-extract.md");
+  loadFile("retro-proposal.md");
   for (const d of DOMAINS) {
     loadFile(`domains/${d}.md`);
   }

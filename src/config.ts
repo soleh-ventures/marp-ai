@@ -76,6 +76,16 @@ export const config = {
     secret: process.env.MAGIC_LINK_SECRET ?? "",
     ttlSeconds: 300, // 5 minutes; eng-review A3.
   },
+  proactive: {
+    // Business-initiated WhatsApp (post-run check-ins, the weekly retro, and
+    // ultimately reminders) requires a VERIFIED production sender + approved
+    // message templates (KER-39 + KER-75). Until that launch work lands, we
+    // gate proactive OUTBOUND off so M1's loop can be built + tested without
+    // firing undeliverable messages at the sandbox number. The analysis and
+    // feeling-capture halves run regardless; only the outbound send is gated.
+    // Flip with PROACTIVE_OUTBOUND=on once the prod number is live.
+    outboundEnabled: process.env.PROACTIVE_OUTBOUND === "on",
+  },
   reminders: {
     // V8 deploy reality: Railway runs one always-on web service (the
     // Twilio webhook listener), so reminders dispatch in-process via a
