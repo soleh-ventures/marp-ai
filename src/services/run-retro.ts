@@ -28,7 +28,8 @@ import {
 import { getAthleticHistory } from "../flows/onboarding.js";
 import { getRetroProposalPrompt } from "../router/prompts.js";
 import { llmCall } from "./llm-call.js";
-import { getStoredPlan } from "./plan/storage.js";
+import { adjustPlan } from "./plan/adjust.js";
+import { getStoredPlan, saveAthletePlan } from "./plan/storage.js";
 import { renderPlanForContext } from "./plan/types.js";
 import { nowInZone } from "./reminders/timezone.js";
 import { sendWhatsApp } from "./twilio-send.js";
@@ -395,4 +396,67 @@ export async function maybeEventRetro(input: { athleteId: string }): Promise<voi
   } catch (err) {
     console.error(`event retro failed for athlete ${input.athleteId}: ${(err as Error).message}`);
   }
+}
+
+// M1 (T6) — confirm → apply.
+//
+// Called after the binder resolves a frame. If that frame belongs to a retro
+// proposal (plan_adjustments.pending_decision_id), apply or decline it:
+//   - key === "accept" → feed the stored edit_request to the existing
+//     adjustPlan, save, mark the adjustment applied.
+//   - any other key (e.g. "keep") → mark declined, plan untouched.
+// A no-op for frames that aren't retro proposals (ordinary conversational
+// forks). adjustPlan failure leaves the adjustment 'proposed' so it can retry.
+export type ApplyResult = {
+  applied: boolean;
+  status?: "applied" | "declined";
+  reason?: "not_a_proposal" | "already_resolved" | "adjust_failed";
+};
+
+export async function applyProposalResolution(input: {
+  athleteId: string;
+  messageId: string;
+  frameId: string;
+  key: string;
+}): Promise<ApplyResult> {
+  const [adj] = await db
+    .select({
+      id: planAdjustments.id,
+      status: planAdjustments.status,
+      proposal: planAdjustments.proposal,
+    })
+    .from(planAdjustments)
+    .where(eq(planAdjustments.pendingDecisionId, input.frameId))
+    .limit(1);
+  if (!adj) return { applied: false, reason: "not_a_proposal" };
+  if (adj.status !== "proposed") return { applied: false, reason: "already_resolved" };
+
+  // The retro-proposal convention is that the affirmative option's key is
+  // "accept" (enforced by the prompt). Anything else is a decline.
+  if (input.key !== "accept") {
+    await db
+      .update(planAdjustments)
+      .set({ status: "declined" })
+      .where(eq(planAdjustments.id, adj.id));
+    return { applied: false, status: "declined" };
+  }
+
+  const editRequest = (adj.proposal as RetroProposal).edit_request;
+  const res = await adjustPlan({
+    athleteId: input.athleteId,
+    messageId: input.messageId,
+    editRequest,
+  });
+  if (!res.ok) {
+    console.error(
+      `proposal apply: adjustPlan failed (${res.reason}) for adjustment ${adj.id} — left proposed`,
+    );
+    return { applied: false, reason: "adjust_failed" };
+  }
+  await saveAthletePlan(input.athleteId, res.plan);
+  await db
+    .update(planAdjustments)
+    .set({ status: "applied", appliedAt: new Date() })
+    .where(eq(planAdjustments.id, adj.id));
+  return { applied: true, status: "applied" };
 }

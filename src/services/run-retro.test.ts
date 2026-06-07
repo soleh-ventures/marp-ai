@@ -3,11 +3,13 @@ import { eq, sql } from "drizzle-orm";
 import { config } from "../config.js";
 import { db } from "../db/client.js";
 import { assertNotProductionDb } from "../db/test-guard.js";
-import { activities, activityAnalyses, athletes, planAdjustments, pendingDecisions } from "../db/schema.js";
+import { activities, activityAnalyses, athletes, messages, planAdjustments, pendingDecisions } from "../db/schema.js";
+import { getAthleticHistory } from "../flows/onboarding.js";
 import { _resetProviderCache, mockProvider } from "./llm/index.js";
-import { saveAthletePlan } from "./plan/storage.js";
+import { getStoredPlan, saveAthletePlan } from "./plan/storage.js";
 import { parsePlan } from "./plan/types.js";
 import {
+  applyProposalResolution,
   computeWeekSignals,
   computeWeekStart,
   parseProposal,
@@ -253,5 +255,110 @@ describe("runWeeklyRetroSweep", () => {
     expect(stats.eligible).toBe(0);
     expect(stats.proposed).toBe(0);
     expect(mockProvider.calls).toHaveLength(0);
+  });
+});
+
+// The plan adjustPlan returns when "accept" is applied — Thursday's tempo
+// becomes easy. Must parse cleanly.
+const MODIFIED_PLAN_JSON = JSON.stringify({
+  source: "generated",
+  start_date: "2026-06-08",
+  weeks: [
+    {
+      index: 1,
+      sessions: [
+        { day_of_week: "monday", type: "rest", description: "Rest" },
+        { day_of_week: "thursday", type: "easy", description: "Easy 6K" },
+        { day_of_week: "sunday", type: "long", description: "Long 20K" },
+      ],
+    },
+  ],
+});
+
+async function seedProposal(athleteId: string, editRequest: string) {
+  const frame = {
+    question: "Ease next week back ~15%?",
+    options: [
+      { key: "accept", label: "Yes, ease it back" },
+      { key: "keep", label: "Keep it as planned" },
+    ],
+  };
+  const [pd] = await db
+    .insert(pendingDecisions)
+    .values({ athleteId, frame })
+    .returning({ id: pendingDecisions.id });
+  if (!pd) throw new Error("pending_decision insert failed");
+  await db.insert(planAdjustments).values({
+    athleteId,
+    trigger: "weekly_sweep",
+    weekStart: "2026-06-08",
+    proposal: { summary: "Ease", rationale: "fatigue", edit_request: editRequest, decision_frame: frame },
+    status: "proposed",
+    pendingDecisionId: pd.id,
+  });
+  const [m] = await db
+    .insert(messages)
+    .values({ athleteId, direction: "in", body: "yes" })
+    .returning({ id: messages.id });
+  if (!m) throw new Error("message insert failed");
+  return { frameId: pd.id, messageId: m.id };
+}
+
+async function readPlanType(athleteId: string, day: string): Promise<string | undefined> {
+  const [a] = await db.select({ athleticHistory: athletes.athleticHistory }).from(athletes).where(eq(athletes.id, athleteId));
+  const plan = getStoredPlan(getAthleticHistory(a?.athleticHistory));
+  return plan?.weeks[0]?.sessions.find((s) => s.day_of_week === day)?.type;
+}
+
+describe("applyProposalResolution (T6 confirm→apply)", () => {
+  test("accept → adjustPlan applied, status applied, plan changed", async () => {
+    const athleteId = await seedAthlete({ withPlan: true });
+    const { frameId, messageId } = await seedProposal(athleteId, "Turn Thursday's tempo into an easy run.");
+    expect(await readPlanType(athleteId, "thursday")).toBe("tempo");
+    mockProvider.setResponses([{ match: "Apply ONLY that change", text: MODIFIED_PLAN_JSON }]);
+    const r = await applyProposalResolution({ athleteId, messageId, frameId, key: "accept" });
+    expect(r).toEqual({ applied: true, status: "applied" });
+    const [adj] = await db.select().from(planAdjustments).where(eq(planAdjustments.athleteId, athleteId));
+    expect(adj?.status).toBe("applied");
+    expect(adj?.appliedAt).not.toBeNull();
+    expect(await readPlanType(athleteId, "thursday")).toBe("easy"); // plan mutated
+  });
+
+  test("decline (key='keep') → status declined, plan untouched, no LLM", async () => {
+    const athleteId = await seedAthlete({ withPlan: true });
+    const { frameId, messageId } = await seedProposal(athleteId, "Ease it.");
+    const r = await applyProposalResolution({ athleteId, messageId, frameId, key: "keep" });
+    expect(r).toEqual({ applied: false, status: "declined" });
+    const [adj] = await db.select().from(planAdjustments).where(eq(planAdjustments.athleteId, athleteId));
+    expect(adj?.status).toBe("declined");
+    expect(await readPlanType(athleteId, "thursday")).toBe("tempo"); // unchanged
+    expect(mockProvider.calls).toHaveLength(0);
+  });
+
+  test("frame that isn't a proposal → not_a_proposal", async () => {
+    const athleteId = await seedAthlete({ withPlan: true });
+    const [pd] = await db
+      .insert(pendingDecisions)
+      .values({ athleteId, frame: { question: "rest or run?", options: [{ key: "rest", label: "Rest" }] } })
+      .returning({ id: pendingDecisions.id });
+    const r = await applyProposalResolution({ athleteId, messageId: "x", frameId: pd!.id, key: "rest" });
+    expect(r).toEqual({ applied: false, reason: "not_a_proposal" });
+  });
+
+  test("already-resolved proposal → already_resolved", async () => {
+    const athleteId = await seedAthlete({ withPlan: true });
+    const { frameId, messageId } = await seedProposal(athleteId, "Ease it.");
+    await db.update(planAdjustments).set({ status: "applied" }).where(eq(planAdjustments.pendingDecisionId, frameId));
+    const r = await applyProposalResolution({ athleteId, messageId, frameId, key: "accept" });
+    expect(r).toEqual({ applied: false, reason: "already_resolved" });
+  });
+
+  test("accept but no plan to edit → adjust_failed, stays proposed", async () => {
+    const athleteId = await seedAthlete({ withPlan: false });
+    const { frameId, messageId } = await seedProposal(athleteId, "Ease it.");
+    const r = await applyProposalResolution({ athleteId, messageId, frameId, key: "accept" });
+    expect(r).toEqual({ applied: false, reason: "adjust_failed" });
+    const [adj] = await db.select().from(planAdjustments).where(eq(planAdjustments.pendingDecisionId, frameId));
+    expect(adj?.status).toBe("proposed"); // unchanged, can retry
   });
 });
