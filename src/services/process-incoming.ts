@@ -133,19 +133,25 @@ export async function processIncomingMessage(
   // coaching reply. A Tier-1 red flag lets the normal flow run but
   // prepends a hard referral to whatever reply gets built.
   const triage = await triageSafety(body, { athleteId, messageId });
-  if (triage.tier !== "none") {
-    // S4: durable audit + operator alert for both tiers. Best-effort —
-    // these never block or alter the runner's reply.
-    await recordSafetyEvent(athleteId, messageId, triage, body);
-    await alertOperator(athleteId, triage, body);
-  }
   if (triage.tier === "emergency") {
+    // The runner is in crisis — get the help number to them FIRST. The
+    // audit write + operator alert must NEVER delay the crisis reply, so
+    // they run after the send (and the alert is fire-and-forget, since a
+    // slow/hanging operator WhatsApp send must not block anything).
     await sendAndPersist(
       athleteId,
       athleteRow.phone,
       emergencyResponse(athleteRow.country),
     );
+    await recordSafetyEvent(athleteId, messageId, triage, body);
+    void alertOperator(athleteId, triage, body).catch(() => {});
     return;
+  }
+  if (triage.tier === "referral") {
+    // S4: durable audit + operator alert. Not a crisis path, so a blocking
+    // await is fine — the referral is prepended to the normal reply below.
+    await recordSafetyEvent(athleteId, messageId, triage, body);
+    await alertOperator(athleteId, triage, body);
   }
   const safetyReferral = referralPrefixFor(triage);
 

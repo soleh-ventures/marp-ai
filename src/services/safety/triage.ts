@@ -40,6 +40,12 @@ export async function triageSafety(
   // the model below is wrong or unavailable. Can only escalate the tier.
   const floor = screenDeterministic(message);
 
+  // Review (adversarial): if the floor already caught an emergency, skip
+  // the LLM entirely — the runner is in crisis and must get the help line
+  // with zero LLM latency, and the LLM can't escalate past "emergency"
+  // anyway. (Also saves the Haiku call on the clearest cases.)
+  if (floor.tier === "emergency") return floor;
+
   // Layer 2 — the LLM classifier adds recall on top. One retry, then we
   // fall back to the deterministic floor (NOT to "none") so a failing
   // classifier can never strip the guardrail on a clear crisis message.

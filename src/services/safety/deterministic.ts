@@ -33,6 +33,40 @@ const EMERGENCY_RULES: Rule[] = [
     tier: "emergency",
     category: "collapse",
   },
+  // Review (adversarial): these are named in the must-catch eval fixtures
+  // but had NO deterministic floor — they fail OPEN to coaching whenever
+  // the LLM is down or wrong. The floor must cover them.
+  {
+    re: /\b(seizure|convulsion|convulsing)\b/i,
+    tier: "emergency",
+    category: "seizure",
+  },
+  {
+    // Stroke signs — precise so "swim stroke" / "stroke of luck" don't fire.
+    re: /\bhaving a stroke\b|\bface (is )?droop|\bdrooping (face|mouth)\b|\bslurred speech\b|\bspeech (is |went |got )?slurr/i,
+    tier: "emergency",
+    category: "stroke",
+  },
+  {
+    re: /\b(won'?t|wont|can'?t|cant) stop bleeding\b|\bbleeding (won'?t|wont) stop\b|\bgushing blood\b|\bbleeding (badly|heavily)\b/i,
+    tier: "emergency",
+    category: "severe_bleeding",
+  },
+  {
+    re: /\boverdos(e|ed|ing)\b|\btook (a bunch of|all my|too many|a whole bottle of) (pills|tablets|meds|medication)\b/i,
+    tier: "emergency",
+    category: "overdose",
+  },
+  {
+    re: /\bheat ?stroke\b/i,
+    tier: "emergency",
+    category: "heat_stroke",
+  },
+  {
+    re: /\bworst headache (of my life|ever)\b/i,
+    tier: "emergency",
+    category: "thunderclap_headache",
+  },
 ];
 
 // Tier 1 — red flags that must reach a professional. Deterministic floor

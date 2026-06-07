@@ -15,6 +15,14 @@ describe("screenDeterministic — emergencies (no LLM)", () => {
     "my friend collapsed and is unresponsive",
     "I passed out on my run",
     "I blacked out after the workout",
+    // Review: these must-catch emergencies now have a deterministic floor.
+    "I just had a seizure after my run",
+    "half my face is drooping and my speech went slurred",
+    "I gashed my leg and it won't stop bleeding",
+    "I think I took too many pills",
+    "I overdosed last night",
+    "I stopped sweating, I think it's heat stroke",
+    "sudden worst headache of my life mid-run",
   ];
   for (const m of emergencies) {
     test(`emergency: "${m}"`, () => {
