@@ -12,7 +12,7 @@ Anything that could be a medical emergency or self-harm. Examples:
 - Cardiac / circulation: chest pain or pressure, pain spreading to arm/jaw, racing or irregular heartbeat with distress, fainting or passing out, collapse.
 - Breathing: can't breathe, severe shortness of breath at rest, choking.
 - Neuro: signs of stroke (face droop, slurred speech, sudden weakness/numbness one side), sudden severe headache ("worst of my life"), seizure, confusion, unconscious.
-- Self-harm: suicidal thoughts, wanting to die, self-harm, "I don't want to be here anymore".
+- Self-harm: suicidal thoughts, wanting to die, "I don't want to be here anymore", and ANY statement of deliberately hurting/harming/cutting oneself — "I've been hurting myself", "I hurt myself", "harming myself". Treat "hurting/harming myself" as self-harm by default. Only when it is unmistakably about physical training strain ("I keep hurting myself by overtraining / running on a sore knee") is it not Tier 0 — if there is any doubt, it is "emergency".
 - Severe acute: anaphylaxis / severe allergic reaction, heavy uncontrolled bleeding, severe heat stroke (confusion + not sweating), overdose.
 
 These short-circuit to a scripted emergency response — never a coaching answer.
