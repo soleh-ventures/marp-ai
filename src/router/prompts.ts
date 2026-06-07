@@ -156,6 +156,11 @@ export function getPostRunAnalysisPrompt(): string {
   return loadFile("post-run-analysis.md").body;
 }
 
+// M1 (T4): extracts a structured RunFeeling from a runner's free-text reply.
+export function getFeelingExtractPrompt(): string {
+  return loadFile("feeling-extract.md").body;
+}
+
 export function getDomainPromptFile(domain: Domain): PromptFile {
   return loadFile(`domains/${domain}.md`);
 }
@@ -171,6 +176,7 @@ export function validateAllPrompts(): void {
   loadFile("plan-ingest.md");
   loadFile("plan-adjust.md");
   loadFile("post-run-analysis.md");
+  loadFile("feeling-extract.md");
   for (const d of DOMAINS) {
     loadFile(`domains/${d}.md`);
   }
