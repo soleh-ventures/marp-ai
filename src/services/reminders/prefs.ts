@@ -73,6 +73,21 @@ export function looksLikeReminderRequest(body: string): boolean {
   return REMINDER_REQUEST_PATTERNS.some((re) => re.test(body));
 }
 
+// KER-73: a yes-ish reply to the reminder prompt that carries NO time
+// ("yes please", "sure", "ok"). When the runner says yes-without-a-time we
+// nudge for the time; anything that isn't an affirmation (and isn't a clear
+// time/decline) is the runner asking a different question while the reminder
+// ask is still open — that routes to the expert router instead of trapping
+// them in the prompt.
+const AFFIRMATION_PATTERNS = [
+  /^\s*(yes|yeah|yep|yup|sure|ok(ay)?|please|definitely|absolutely)\b/i,
+  /^\s*(sounds good|go for it|do it|let'?s do it)\b/i,
+];
+
+export function looksLikeReminderAffirmation(body: string): boolean {
+  return AFFIRMATION_PATTERNS.some((re) => re.test(body));
+}
+
 export function classifyPrefsReply(body: string): PrefsCaptureResult {
   if (DECLINE_PATTERNS.some((re) => re.test(body))) return { kind: "decline" };
 
@@ -185,3 +200,11 @@ export const REMINDER_DECLINED_REPLY =
 
 export const REMINDER_AMBIGUOUS_REPLY =
   "Sorry — I need either a time (e.g. \"6am\" or \"5:30\") or \"no thanks\".";
+
+// KER-73: appended to the expert router's answer when the runner asked a
+// different question while the reminder ask was still open. Keeps the ask
+// live for later (and must contain REMINDER_PROMPT_SIGNATURE so the
+// reply-context branch in process-incoming stays armed next turn).
+export const REMINDER_REASK =
+  "\n\n(Still open whenever you want it: a reminder for each training day — " +
+  "just send a time like \"6am\", or \"no thanks\".)";
