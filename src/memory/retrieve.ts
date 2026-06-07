@@ -68,6 +68,7 @@ export async function getMemoryContext(
       locale: athletes.locale,
       phone: athletes.phone,
       timezone: athletes.timezone,
+      homeCity: athletes.homeCity,
       athleticHistory: athletes.athleticHistory,
     })
     .from(athletes)
@@ -192,6 +193,7 @@ export async function getMemoryContext(
     text: formatContext({
       name: athlete.name,
       locale: athlete.locale,
+      homeCity: athlete.homeCity,
       athleticHistory: athlete.athleticHistory,
       flags: flagRows,
       block,
@@ -222,6 +224,10 @@ export type ActivityRow = {
 type FormatInput = {
   name: string | null;
   locale: string;
+  // KER-78: the runner's HOME city (location SSOT). Surfaced as part of the
+  // ground-truth line so the LLM has an authoritative city to anchor on and
+  // stops grabbing a stale one from the message log.
+  homeCity?: string | null;
   athleticHistory: unknown;
   flags: Array<{
     kind: string;
@@ -311,10 +317,20 @@ export function formatContext(input: FormatInput): string {
   if (input.zonedToday) {
     const { date, weekday, time, timezone } = input.zonedToday;
     const wd = weekday.charAt(0).toUpperCase() + weekday.slice(1);
+    // KER-78: state the resolved HOME city explicitly. Measured: with only
+    // the timezone here, the LLM had no authoritative city and grabbed a
+    // stale one from the message log 44% of the time (eval:grounding). The
+    // fix is a concrete value to anchor on, not a vague "ignore conflicts".
+    const homeLine = input.homeCity
+      ? ` The runner's home is ${input.homeCity} — treat that as their ` +
+        `current city unless they explicitly say they have permanently ` +
+        `moved. Ignore any other city mentioned below (including in past ` +
+        `messages); a place named on a trip is not where they live.`
+      : ` (Home city not on file — do NOT guess it from past messages or ` +
+        `the history; if asked where they live, say you don't have it yet.)`;
     parts.push(
-      `Now (ground truth — use this, never compute the day/time yourself, ` +
-        `and ignore any conflicting city in the history below): ` +
-        `${wd}, ${date}, ${time} in ${timezone}.`,
+      `Now (ground truth — use this, never compute the day/time yourself): ` +
+        `${wd}, ${date}, ${time} in ${timezone}.${homeLine}`,
     );
   }
 

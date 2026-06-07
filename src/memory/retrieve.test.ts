@@ -365,6 +365,38 @@ describe("formatContext", () => {
     expect(text).not.toContain("Active race block");
     expect(text).not.toContain("Recent training");
   });
+
+  // KER-78: the ground-truth line must name the resolved HOME city and tell
+  // the LLM to ignore other cities in the log. This is the fix the
+  // poisoning eval proved necessary (44% → 0%).
+  test("ground-truth line names the home city when set", () => {
+    const text = formatContext({
+      name: "Kemal",
+      locale: "en",
+      homeCity: "Berlin",
+      athleticHistory: null,
+      flags: [],
+      block: undefined,
+      messages: [],
+      zonedToday: { date: "2026-06-08", weekday: "monday", time: "09:00", timezone: "Europe/Berlin" },
+    });
+    expect(text).toContain("home is Berlin");
+    expect(text).toMatch(/ignore any other city/i);
+  });
+
+  test("ground-truth line says home is unknown when not set", () => {
+    const text = formatContext({
+      name: "Kemal",
+      locale: "en",
+      athleticHistory: null,
+      flags: [],
+      block: undefined,
+      messages: [],
+      zonedToday: { date: "2026-06-08", weekday: "monday", time: "09:00", timezone: "Europe/Berlin" },
+    });
+    expect(text).toMatch(/home city not on file/i);
+    expect(text).not.toContain("home is ");
+  });
 });
 
 describe("formatActivityLine", () => {

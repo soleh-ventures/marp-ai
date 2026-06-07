@@ -44,8 +44,9 @@ import {
 } from "./reminders/prefs.js";
 import { bestTimezoneForAthlete } from "./strava-activities.js";
 import {
-  applyTimezoneOverride,
-  extractTimezoneFromMessage,
+  applyLocationChange,
+  extractLocationFromMessage,
+  type LocationChange,
   looksLikeTimezoneChange,
 } from "./timezone-override.js";
 import {
@@ -361,7 +362,7 @@ export async function processIncomingMessage(
   let routerFrame: DecisionFrame | null = null;
   // F8d: holds the IANA tz extracted from a location-change message, when
   // the timezone-override branch fires (assigned in its else-if condition).
-  let tzOverride: string | null = null;
+  let locChange: LocationChange | null = null;
   // RC3: holds the parsed reminder request when that branch fires.
   let reminderReq: PrefsCaptureResult = { kind: "ambiguous" };
   if (looksLikeDeletionRequest(body)) {
@@ -546,18 +547,19 @@ export async function processIncomingMessage(
     }
   } else if (
     looksLikeTimezoneChange(body) &&
-    (tzOverride = await extractTimezoneFromMessage({
+    (locChange = await extractLocationFromMessage({
       athleteId,
       messageId,
       body,
     })) !== null
   ) {
-    // F8d: runner is correcting their location ("I live in NYC actually" /
-    // "I'm in Tokyo this week"). Update the stored timezone so reminders
-    // and training dates land in the right frame. If extraction returns
-    // null (e.g. "I'm in pain"), the && short-circuits and we fall
-    // through to normal routing — no message gets swallowed.
-    replyText = await applyTimezoneOverride(athleteId, tzOverride);
+    // F8d + KER-78: runner is correcting their location. A permanent move
+    // ("I now live in NYC") updates the home-city SSOT + timezone; a
+    // temporary trip ("I'm in Tokyo this week") updates only the timezone
+    // and preserves home. If extraction returns null (e.g. "I'm in pain"),
+    // the && short-circuits and we fall through to normal routing — no
+    // message gets swallowed.
+    replyText = await applyLocationChange(athleteId, locChange);
   } else if (
     looksLikeReminderRequest(body) &&
     (reminderReq = classifyPrefsReply(body)).kind !== "ambiguous"

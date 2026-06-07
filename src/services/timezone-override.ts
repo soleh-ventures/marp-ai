@@ -33,15 +33,16 @@ export function looksLikeTimezoneChange(body: string): boolean {
   return STRONG_HINT.test(body) || IM_IN_PLACE.test(body);
 }
 
-const SYSTEM = `You extract an IANA timezone from a chat message where a runner says where they are or where they live.
+const SYSTEM = `You read a chat message where a runner says where they are or where they live, and extract their location plus whether this is a permanent MOVE or a temporary TRIP.
 
-Return ONLY JSON: {"timezone": "<IANA name>"} or {"timezone": null}.
+Return ONLY JSON: {"timezone": "<IANA name>", "city": "<City>", "kind": "move"|"trip"} or {"timezone": null}.
 
 Rules:
 - Use a canonical IANA name like "America/New_York", "Asia/Tokyo", "Europe/Berlin", "Australia/Sydney".
-- Map cities/regions/countries to the right zone (NYC/New York -> America/New_York, London -> Europe/London, Bali -> Asia/Makassar).
+- "city" is the human city/place name as the runner would say it (e.g. "Berlin", "New York", "Bali"). Map it to the right IANA zone (NYC/New York -> America/New_York, London -> Europe/London, Bali -> Asia/Makassar).
+- "kind": "move" when they are relocating / now live there ("I moved to X", "I now live in X", "relocated to X", "I'm based in X"). "trip" when they are only there temporarily ("I'm in X this week", "visiting X", "travelling to X", "here in X for a race").
 - If the message names no real place (e.g. "I'm in pain", "I'm in the zone", "I'm in a rush"), return {"timezone": null}.
-- Never invent a zone you are unsure of. When unsure, return null.
+- Never invent a zone you are unsure of. When unsure, return {"timezone": null}.
 - Output JSON only, no prose, no markdown.`;
 
 export type ExtractTimezoneInput = {
@@ -50,12 +51,19 @@ export type ExtractTimezoneInput = {
   body: string;
 };
 
-// Returns a validated IANA timezone string, or null when the message
-// doesn't carry a usable location. Validates via Intl so a hallucinated
-// zone never gets persisted.
-export async function extractTimezoneFromMessage(
+export type LocationChange = {
+  timezone: string; // validated IANA zone
+  city: string | null; // human city name, when the model gave one
+  kind: "move" | "trip"; // permanent relocation vs temporary travel
+};
+
+// Returns a validated location change, or null when the message doesn't
+// carry a usable location. Validates the IANA zone via Intl so a
+// hallucinated zone never gets persisted. `kind` drives whether the HOME
+// city (the location SSOT) is updated — see applyLocationChange.
+export async function extractLocationFromMessage(
   input: ExtractTimezoneInput,
-): Promise<string | null> {
+): Promise<LocationChange | null> {
   let raw: string;
   try {
     const res = await llmCall(
@@ -63,7 +71,7 @@ export async function extractTimezoneFromMessage(
         model: config.llm.classifierModel,
         system: SYSTEM,
         user: input.body,
-        maxTokens: 60,
+        maxTokens: 80,
         temperature: 0,
         cacheSystem: true,
       },
@@ -81,13 +89,13 @@ export async function extractTimezoneFromMessage(
 
   const match = raw.match(/\{[\s\S]*\}/);
   if (!match) return null;
-  let parsed: unknown;
+  let parsed: Record<string, unknown>;
   try {
-    parsed = JSON.parse(match[0]);
+    parsed = JSON.parse(match[0]) as Record<string, unknown>;
   } catch {
     return null;
   }
-  const tz = (parsed as Record<string, unknown>)?.timezone;
+  const tz = parsed.timezone;
   if (typeof tz !== "string" || tz.trim() === "") return null;
   // Validate — Intl throws on a bogus zone.
   try {
@@ -95,20 +103,51 @@ export async function extractTimezoneFromMessage(
   } catch {
     return null;
   }
-  return tz;
+  const city =
+    typeof parsed.city === "string" && parsed.city.trim() !== ""
+      ? parsed.city.trim()
+      : null;
+  // Default to "trip" — the conservative choice. Only an explicit move
+  // overwrites the home city, so a misread never silently repoints home.
+  const kind = parsed.kind === "move" ? "move" : "trip";
+  return { timezone: tz, city, kind };
 }
 
-// Persist the new timezone and return the confirmation reply.
-export async function applyTimezoneOverride(
+// Persist a location change and return the confirmation reply.
+//
+// A MOVE updates the home-city SSOT (`homeCity` + `homeCitySetAt`) AND the
+// timezone. A TRIP updates only the timezone so reminders land right while
+// the runner is away, but `homeCity` is preserved — "where do I live"
+// stays correct and reminders fall back to home once they return and
+// correct the zone. (D2, KER-78.)
+export async function applyLocationChange(
   athleteId: string,
-  timezone: string,
+  loc: LocationChange,
 ): Promise<string> {
+  if (loc.kind === "move") {
+    await db
+      .update(athletes)
+      .set({
+        timezone: loc.timezone,
+        ...(loc.city ? { homeCity: loc.city, homeCitySetAt: new Date() } : {}),
+      })
+      .where(eq(athletes.id, athleteId));
+    const where = loc.city ? ` in ${loc.city}` : "";
+    return (
+      `Got it — I've updated your home${where} and I'll use ` +
+      `${loc.timezone.replace(/_/g, " ")} for your reminders and training ` +
+      `dates. Tell me again any time you move.`
+    );
+  }
+  // Trip: timezone only, home preserved.
   await db
     .update(athletes)
-    .set({ timezone })
+    .set({ timezone: loc.timezone })
     .where(eq(athletes.id, athleteId));
+  const where = loc.city ? ` while you're in ${loc.city}` : "";
   return (
-    `Updated — I'll use ${timezone.replace(/_/g, " ")} for your reminders ` +
-    `and training dates now. Tell me again any time you move.`
+    `Updated — I'll use ${loc.timezone.replace(/_/g, " ")} for your reminders ` +
+    `and training dates${where}. I've kept your home on file; just say ` +
+    `"I moved" if this is a permanent change.`
   );
 }

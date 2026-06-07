@@ -90,6 +90,17 @@ export const athletes = pgTable(
     // an insight dimension (where are runners signing up from?). NULL =
     // unknown dial code or not yet derived.
     country: text("country"),
+    // KER-78 (Grounded Coach, Phase 1): the runner's HOME city — the
+    // authoritative location fact. Together with `timezone` (the IANA half)
+    // this is the location SSOT. Written only on a permanent-move intent
+    // ("I moved to / now live in X"); a temporary trip ("I'm in X this
+    // week") shifts `timezone` for reminders but leaves this untouched, so
+    // "where do I live" never drifts to a travel destination. Surfaced as a
+    // ground-truth line in the coaching context so the LLM stops grabbing a
+    // stale city from the message log (measured 44% poisoning without it —
+    // see eval:grounding / KER-77).
+    homeCity: text("home_city"),
+    homeCitySetAt: timestamp("home_city_set_at", { withTimezone: true }),
     // V8: reminder preferences. JSON shape:
     //   { enabled: boolean, time_local: "HH:MM" }
     // enabled=false → opt-out (no reminders). When enabled=true, the

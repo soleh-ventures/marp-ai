@@ -31,6 +31,11 @@ function ctx(opts: {
   return formatContext({
     name: "Kemal",
     locale: "en",
+    // KER-78: the home-city SSOT now says Berlin. Pre-fix (no homeCity) the
+    // ground-truth line only carried the timezone and the stale "Tokyo" in
+    // the message log poisoned 44% of clear cases (the KER-77 baseline).
+    // With the SSOT populated, this eval is Phase 1's regression gate.
+    homeCity: "Berlin",
     athleticHistory: opts.athleticHistory ?? { experience: "intermediate" },
     flags: [],
     block: undefined,
