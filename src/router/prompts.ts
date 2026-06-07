@@ -161,6 +161,11 @@ export function getFeelingExtractPrompt(): string {
   return loadFile("feeling-extract.md").body;
 }
 
+// M1 (T5): decides whether the week warrants a plan adjustment and proposes one.
+export function getRetroProposalPrompt(): string {
+  return loadFile("retro-proposal.md").body;
+}
+
 export function getDomainPromptFile(domain: Domain): PromptFile {
   return loadFile(`domains/${domain}.md`);
 }
@@ -177,6 +182,7 @@ export function validateAllPrompts(): void {
   loadFile("plan-adjust.md");
   loadFile("post-run-analysis.md");
   loadFile("feeling-extract.md");
+  loadFile("retro-proposal.md");
   for (const d of DOMAINS) {
     loadFile(`domains/${d}.md`);
   }

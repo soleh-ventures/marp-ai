@@ -24,6 +24,7 @@ import { db } from "../db/client.js";
 import { activities, activityAnalyses } from "../db/schema.js";
 import { getFeelingExtractPrompt } from "../router/prompts.js";
 import { llmCall } from "./llm-call.js";
+import { maybeEventRetro } from "./run-retro.js";
 
 const RECENT_RUN_WINDOW_H = 48;
 
@@ -124,6 +125,18 @@ export async function extractRunFeeling(input: {
       target: activityAnalyses.activityId,
       set: { feeling, updatedAt: new Date() },
     });
+
+  // M1 (T5): a strong post-run signal triggers an event-driven retro (decision
+  // 3A) — fire-and-forget; runWeeklyRetro's guards prevent proposal spam.
+  const strong =
+    feeling.pain.present ||
+    (feeling.effort.rpe != null && feeling.effort.rpe >= 8) ||
+    feeling.effort.band === "max";
+  if (strong) {
+    void maybeEventRetro({ athleteId: input.athleteId }).catch((err) => {
+      console.error(`event retro trigger failed: ${(err as Error).message}`);
+    });
+  }
 
   return { captured: true, activityId: act.id, feeling };
 }
