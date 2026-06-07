@@ -19,6 +19,7 @@
     "eval:plan": "bun run src/scripts/eval-plan.ts",
     "eval:m1": "bun run src/scripts/eval-m1.ts",
     "eval:safety": "bun run src/scripts/eval-safety.ts",
+    "eval:grounding": "bun run src/scripts/eval-grounding-poison.ts",
     "reminders:run": "bun run src/scripts/run-reminders.ts"
   },
   "dependencies": {
