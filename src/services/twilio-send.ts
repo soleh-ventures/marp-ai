@@ -1,4 +1,5 @@
 import { config } from "../config.js";
+import { splitForWhatsApp } from "./whatsapp-split.js";
 
 // Twilio outbound — raw fetch instead of the SDK. The REST API is two
 // fields (To, From, Body) over basic auth; pulling in the whole twilio
@@ -23,33 +24,17 @@ export class TwilioSendError extends Error {
   }
 }
 
-/**
- * Send a WhatsApp message via Twilio's REST API.
- *
- * @param toE164 — recipient phone number in E.164 (e.g. "+4917628950549").
- *                The "whatsapp:" prefix is added automatically.
- * @param body  — message body. Twilio's limit is 1600 chars per WhatsApp
- *                message; we cap conservatively at 1500 and let the
- *                caller decide whether to split.
- */
-export async function sendWhatsApp(
+async function sendOne(
+  sid: string,
+  token: string,
+  from: string,
   toE164: string,
   body: string,
-): Promise<SendWhatsAppResult> {
-  const sid = config.twilio.accountSid;
-  const token = config.twilio.authToken;
-  const from = config.twilio.whatsappFrom;
-  if (!sid || !token) {
-    throw new Error(
-      "TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN must be set to send WhatsApp messages",
-    );
-  }
-
-  const trimmed = body.length > 1500 ? `${body.slice(0, 1497)}...` : body;
+): Promise<string> {
   const params = new URLSearchParams({
     To: toE164.startsWith("whatsapp:") ? toE164 : `whatsapp:${toE164}`,
     From: from,
-    Body: trimmed,
+    Body: body,
   });
   const auth = Buffer.from(`${sid}:${token}`).toString("base64");
   const url = `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`;
@@ -84,5 +69,42 @@ export async function sendWhatsApp(
       text.slice(0, 500),
     );
   }
-  return { twilioMessageSid: parsed.sid };
+  return parsed.sid;
+}
+
+/**
+ * Send a WhatsApp message via Twilio's REST API.
+ *
+ * Bodies over the per-message limit are split into multiple ordered
+ * messages (sent sequentially to preserve order) instead of being
+ * truncated. Returns the SID of the FIRST part — callers persist the
+ * full body in one outbound row, so the SID just needs to be a valid
+ * Twilio handle for that exchange.
+ *
+ * @param toE164 — recipient phone number in E.164 (e.g. "+4917628950549").
+ *                The "whatsapp:" prefix is added automatically.
+ * @param body  — message body of any length.
+ */
+export async function sendWhatsApp(
+  toE164: string,
+  body: string,
+): Promise<SendWhatsAppResult> {
+  const sid = config.twilio.accountSid;
+  const token = config.twilio.authToken;
+  const from = config.twilio.whatsappFrom;
+  if (!sid || !token) {
+    throw new Error(
+      "TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN must be set to send WhatsApp messages",
+    );
+  }
+
+  const parts = splitForWhatsApp(body);
+  let firstSid: string | undefined;
+  for (const part of parts) {
+    const partSid = await sendOne(sid, token, from, toE164, part);
+    if (firstSid === undefined) firstSid = partSid;
+  }
+  // parts is never empty: splitForWhatsApp returns [body] for short bodies
+  // and at least one chunk otherwise. The "" guard keeps TS happy.
+  return { twilioMessageSid: firstSid ?? "" };
 }

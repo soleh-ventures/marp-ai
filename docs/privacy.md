@@ -21,7 +21,7 @@ Per athlete (linked by `athletes.id` UUID):
 | Active flags | `active_flags` | Injury / illness / travel / life context |
 | Race blocks | `race_blocks` (with narrative summaries) | Goal tracking + long-term memory |
 | Strava OAuth tokens | `strava_connections` (encrypted at rest) | API access for ongoing activity sync |
-| LLM cost telemetry | `llm_calls` (anonymisable; FK `SET NULL` on athlete delete) | Cost analysis; survives erasure as aggregated stats |
+| LLM cost telemetry + prompt I/O | `llm_calls` (cost cols anonymisable via `SET NULL`; `input_user`/`output_text` scrubbed on erasure) | Cost analysis (survives as aggregated stats) + answer-quality debugging (PII, removed on erasure) |
 | Dedup state | `processed_messages` (Twilio SIDs) | Idempotency; opaque IDs without Twilio account access |
 
 What we don't hold: payment methods (Twilio + Strava handle their own), real names beyond what the runner shares, location data beyond what's embedded in activity GPS traces.
@@ -135,9 +135,9 @@ Every athlete-linked table has the right FK behaviour for erasure:
 | `messages` | CASCADE | removed |
 | `strava_connections` | CASCADE | removed |
 | `pending_decisions` | CASCADE | removed |
-| `llm_calls` | SET NULL (on both `athlete_id` and `message_id`) | row survives anonymised |
+| `llm_calls` | SET NULL (`athlete_id`, `message_id`) + text columns scrubbed | row survives anonymised, PII text removed |
 
-`llm_calls` deliberately survives. The row stores token counts + model + latency — no message bodies. Aggregate cost telemetry shouldn't be destroyed when one runner exercises Article 17.
+`llm_calls` deliberately survives, but in anonymised form. The row keeps token counts + model + latency + cost so aggregate cost telemetry isn't destroyed when one runner exercises Article 17. It also stores `input_user` + `output_text` (the prompt payload and model reply, captured for answer-quality debugging) — those hold PII, so `deleteAthlete` explicitly NULLs them before deleting the athlete (see `src/services/erasure.ts`). What survives is the cost skeleton, not the conversation.
 
 `processed_messages` (Twilio SID dedup) is out of scope for v1 erasure — the SIDs are opaque without Twilio account access, and dropping them would risk re-processing a webhook retry as a new message. Revisit if a specific request requires it.
 
@@ -237,9 +237,10 @@ Not yet enforced via automated retention. Today:
 
 - Messages live forever (until athlete erasure)
 - Activities live forever
-- `llm_calls` lives forever (anonymised on athlete delete)
+- `llm_calls` lives forever (cost columns anonymised on athlete delete)
+- `llm_calls.input_user` / `output_text` hold PII and currently persist for non-deleted athletes until a retention sweep runs (tracked as TODO O1)
 
-A retention policy (e.g., soft-delete messages older than 2 years; archive `llm_calls` after 1 year) is a clean follow-up. Captured in the post-launch review notes.
+A retention policy (e.g., soft-delete messages older than 2 years; sweep `llm_calls` I/O text after ~30 days, archive cost rows after 1 year) is a clean follow-up. The I/O-text sweep (TODO O1) is the higher-priority one since that column is the only place PII accumulates unbounded.
 
 ---
 

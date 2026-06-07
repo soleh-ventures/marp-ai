@@ -46,3 +46,58 @@ describe("llmCall — T6 cache telemetry", () => {
     expect(rows[0]?.cacheReadTokens).toBe(0);
   });
 });
+
+describe("llmCall — I/O capture for answer-quality debugging", () => {
+  test("persists input_user and output_text so a reply can be traced to its prompt", async () => {
+    mockProvider.setResponses([{ match: /.*/, text: "rest 3 days" }]);
+    await llmCall(
+      {
+        model: "mock",
+        system: "you are a coach",
+        user: "achilles is sore, what do I do",
+        maxTokens: 50,
+      },
+      { component: "domain" },
+    );
+    const rows = await db.select().from(llmCalls);
+    expect(rows).toHaveLength(1);
+    // We store the dynamic user payload (carries runner context) and the
+    // model reply. The system prompt is intentionally NOT stored — it's
+    // recoverable from git via `component`.
+    expect(rows[0]?.inputUser).toBe("achilles is sore, what do I do");
+    expect(rows[0]?.outputText).toBe("rest 3 days");
+  });
+
+  test("truncates oversized I/O text with a marker to bound row size", async () => {
+    const huge = "x".repeat(120_000);
+    mockProvider.setResponses([{ match: /.*/, text: huge }]);
+    await llmCall(
+      { model: "mock", system: "sys", user: huge, maxTokens: 10 },
+      { component: "other" },
+    );
+    const rows = await db.select().from(llmCalls);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.inputUser).toContain("[truncated 20000 chars]");
+    expect(rows[0]?.outputText).toContain("[truncated 20000 chars]");
+    // Capped at 100k + the marker suffix, never the full 120k.
+    expect((rows[0]?.inputUser?.length ?? 0)).toBeLessThan(120_000);
+  });
+
+  test("does not cut through a surrogate pair (emoji) at the cap boundary", async () => {
+    // Place a 2-code-unit emoji straddling the 100k boundary: 99_999 filler
+    // chars, then "😀" (code units 100_000 + 100_001). A naive slice(0,100k)
+    // would keep only the leading surrogate and produce invalid UTF-8.
+    const withEmoji = `${"x".repeat(99_999)}😀${"y".repeat(50_000)}`;
+    mockProvider.setResponses([{ match: /.*/, text: "ok" }]);
+    await llmCall(
+      { model: "mock", system: "sys", user: withEmoji, maxTokens: 10 },
+      { component: "other" },
+    );
+    const rows = await db.select().from(llmCalls);
+    const stored = rows[0]?.inputUser ?? "";
+    // The stored text must be valid (round-trips through Postgres without
+    // throwing) and must not end in a lone leading surrogate.
+    const lastChar = stored.charCodeAt(stored.indexOf("…") - 1);
+    expect(lastChar >= 0xd800 && lastChar <= 0xdbff).toBe(false);
+  });
+});

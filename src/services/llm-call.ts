@@ -23,10 +23,31 @@ export type CallContext = {
   component: LlmComponent;
 };
 
+// Hard cap on the I/O text we persist per row. Bounds row size against a
+// pathological payload (a runner pasting a huge plan, a runaway reply).
+// The dynamic context that matters for debugging fits comfortably under
+// this; anything past it is logged truncated with a marker.
+const IO_TEXT_CAP = 100_000;
+
+function capText(s: string): string {
+  if (s.length <= IO_TEXT_CAP) return s;
+  let end = IO_TEXT_CAP;
+  // Don't cut through a surrogate pair (e.g. an emoji): a lone high
+  // surrogate is invalid UTF-8 and Postgres rejects it. Back off one
+  // char if the boundary char is a leading surrogate.
+  const code = s.charCodeAt(end - 1);
+  if (code >= 0xd800 && code <= 0xdbff) end -= 1;
+  return `${s.slice(0, end)}…[truncated ${s.length - end} chars]`;
+}
+
 // Every LLM call in the app goes through this wrapper. It exists for one
 // reason: E13 — log model, tokens, cost, latency into llm_calls so we can
 // answer "what does a runner cost per week" from day 1. Skipping this
 // wrapper is a bug.
+//
+// It also captures input_user + output_text so a bad reply can be traced
+// to what produced it. These hold PII (runner context, health detail), so
+// athlete erasure NULLs them — see erasure.ts.
 export async function llmCall(
   req: LlmRequest,
   ctx: CallContext,
@@ -40,6 +61,8 @@ export async function llmCall(
     model: req.model,
     tokensIn: res.tokensIn,
     tokensOut: res.tokensOut,
+    inputUser: capText(req.user),
+    outputText: capText(res.text),
     // T6: persist the cache telemetry so we can verify caching is firing
     // in prod (SELECT count(*) FROM llm_calls WHERE cache_hit) and so the
     // cost estimate reflects the 10% rate on cache-read tokens.

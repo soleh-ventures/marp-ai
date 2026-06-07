@@ -314,6 +314,16 @@ export const llmCalls = pgTable(
     cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
     costEstimateUsd: doublePrecision("cost_estimate_usd").notNull(),
     latencyMs: integer("latency_ms").notNull(),
+    // Answer-quality debugging: the variable parts of the call so a bad
+    // reply can be traced back to what produced it. We store only the
+    // dynamic payload (input_user carries the retrieved memory/context)
+    // and the model's reply. The system prompt is large + cached and
+    // already lives in git keyed by `component`, so we don't duplicate it
+    // per row. Both nullable: pre-migration rows have none, and erasure
+    // NULLs them on athlete deletion (these hold PII — see erasure.ts).
+    // The wrapper truncates each to a sane cap to bound row size.
+    inputUser: text("input_user"),
+    outputText: text("output_text"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

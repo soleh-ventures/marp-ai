@@ -1,6 +1,6 @@
 {
-  "id": "cd1ed2ed-098c-4415-86a5-3bcf101f5d0a",
-  "prevId": "0360f94c-1e0c-4f10-8e3f-dfe34513e7b0",
+  "id": "8e19195e-dd4b-48d0-a9fe-7c403f0e91d6",
+  "prevId": "cd1ed2ed-098c-4415-86a5-3bcf101f5d0a",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -251,6 +251,134 @@
             "id"
           ],
           "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.activity_analyses": {
+      "name": "activity_analyses",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "athlete_id": {
+          "name": "athlete_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "activity_id": {
+          "name": "activity_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "objective": {
+          "name": "objective",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "feeling": {
+          "name": "feeling",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "coach_read": {
+          "name": "coach_read",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "activity_analyses_activity_idx": {
+          "name": "activity_analyses_activity_idx",
+          "columns": [
+            {
+              "expression": "activity_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "activity_analyses_athlete_created_idx": {
+          "name": "activity_analyses_athlete_created_idx",
+          "columns": [
+            {
+              "expression": "athlete_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "activity_analyses_athlete_id_athletes_id_fk": {
+          "name": "activity_analyses_athlete_id_athletes_id_fk",
+          "tableFrom": "activity_analyses",
+          "tableTo": "athletes",
+          "columnsFrom": [
+            "athlete_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "activity_analyses_activity_id_activities_id_fk": {
+          "name": "activity_analyses_activity_id_activities_id_fk",
+          "tableFrom": "activity_analyses",
+          "tableTo": "activities",
+          "columnsFrom": [
+            "activity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
@@ -763,6 +891,149 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.plan_adjustments": {
+      "name": "plan_adjustments",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "athlete_id": {
+          "name": "athlete_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "trigger": {
+          "name": "trigger",
+          "type": "plan_adjustment_trigger",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "plan_adjustment_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'proposed'"
+        },
+        "week_start": {
+          "name": "week_start",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "proposal": {
+          "name": "proposal",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "pending_decision_id": {
+          "name": "pending_decision_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "applied_at": {
+          "name": "applied_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "plan_adjustments_athlete_created_idx": {
+          "name": "plan_adjustments_athlete_created_idx",
+          "columns": [
+            {
+              "expression": "athlete_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "plan_adjustments_weekly_idem_idx": {
+          "name": "plan_adjustments_weekly_idem_idx",
+          "columns": [
+            {
+              "expression": "athlete_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "week_start",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"plan_adjustments\".\"trigger\" = 'weekly_sweep'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "plan_adjustments_athlete_id_athletes_id_fk": {
+          "name": "plan_adjustments_athlete_id_athletes_id_fk",
+          "tableFrom": "plan_adjustments",
+          "tableTo": "athletes",
+          "columnsFrom": [
+            "athlete_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "plan_adjustments_pending_decision_id_pending_decisions_id_fk": {
+          "name": "plan_adjustments_pending_decision_id_pending_decisions_id_fk",
+          "tableFrom": "plan_adjustments",
+          "tableTo": "pending_decisions",
+          "columnsFrom": [
+            "pending_decision_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.processed_messages": {
       "name": "processed_messages",
       "schema": "",
@@ -1111,6 +1382,25 @@
       "values": [
         "in",
         "out"
+      ]
+    },
+    "public.plan_adjustment_status": {
+      "name": "plan_adjustment_status",
+      "schema": "public",
+      "values": [
+        "proposed",
+        "applied",
+        "declined",
+        "expired",
+        "superseded"
+      ]
+    },
+    "public.plan_adjustment_trigger": {
+      "name": "plan_adjustment_trigger",
+      "schema": "public",
+      "values": [
+        "weekly_sweep",
+        "event"
       ]
     },
     "public.race_block_state": {

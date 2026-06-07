@@ -31,9 +31,11 @@ import {
   REMINDER_DECLINED_REPLY,
   REMINDER_PROMPT,
   REMINDER_PROMPT_SIGNATURE,
+  REMINDER_REASK,
   type PrefsCaptureResult,
   classifyPrefsReply,
   isPrefsAsked,
+  looksLikeReminderAffirmation,
   looksLikeReminderRequest,
 } from "./reminders/prefs.js";
 import { bestTimezoneForAthlete } from "./strava-activities.js";
@@ -392,8 +394,25 @@ export async function processIncomingMessage(
         })
         .where(eq(athletes.id, athleteId));
       replyText = REMINDER_CAPTURED_REPLY(result.time_local, result.timing);
-    } else {
+    } else if (looksLikeReminderAffirmation(body)) {
+      // KER-73: a yes-without-a-time ("sure", "yes please") — nudge for the
+      // actual time rather than routing an empty question to the expert.
       replyText = REMINDER_AMBIGUOUS_REPLY;
+    } else {
+      // KER-73: the runner asked something else while the reminder ask was
+      // still open. Answer THAT via the expert router and re-append the
+      // reminder ask so it stays settable later — don't trap them in the
+      // prompt (mirrors the pivot branch's free-form fallback).
+      fireThinkingAck(athleteRow.phone);
+      const memory = await getMemoryContext(athleteId);
+      const routed = await route({
+        message: body,
+        athleteId,
+        messageId,
+        contextSummary: memory.text,
+      });
+      replyText = routed.finalText.trim() + REMINDER_REASK;
+      routerFrame = routed.frame;
     }
   } else if (getPivotState(history) === "awaiting_plan") {
     // V6: runner is in the BYO branch — anything they send next is

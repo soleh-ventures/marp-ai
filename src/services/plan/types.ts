@@ -267,22 +267,24 @@ export function sessionDate(
   return base.toISOString().slice(0, 10);
 }
 
-// "Mon, 8 Jun" (or "Mon, 8 Jun 2026" with year). Built from UTC parts with
-// fixed weekday/month names rather than Intl.DateTimeFormat. Two reasons:
-// the printed day matches the calendar date regardless of server tz, AND the
-// punctuation is deterministic across runtimes — ICU locale data drifts on
-// whether en-GB short format emits the comma after the weekday (some Bun/Node
-// builds give "Tue 9 Jun", others "Tue, 9 Jun"), which made the output
-// runtime-dependent. Building the string ourselves pins it.
-const WEEKDAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const MONTH_SHORT = [
+// "Mon, 8 Jun" (or "Mon, 8 Jun 2026" with year). Read in UTC so the
+// printed day matches the calendar date exactly, regardless of server tz.
+//
+// Formatted from fixed abbreviation tables rather than Intl.DateTimeFormat:
+// the comma separator in en-GB short-date output is ICU-version-dependent
+// (Linux/CI emits "Mon, 8 Jun", some macOS/Bun ICU builds emit "Mon 8 Jun"),
+// which made the output non-deterministic across environments. Building the
+// string by hand pins it so tests and production agree everywhere.
+const WEEKDAY_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+const MONTH_ABBR = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
+] as const;
+
 export function formatShortDate(isoDate: string, withYear = false): string {
   const d = new Date(`${isoDate}T00:00:00Z`);
   if (Number.isNaN(d.getTime())) return isoDate;
-  const base = `${WEEKDAY_SHORT[d.getUTCDay()]}, ${d.getUTCDate()} ${MONTH_SHORT[d.getUTCMonth()]}`;
+  const base = `${WEEKDAY_ABBR[d.getUTCDay()]}, ${d.getUTCDate()} ${MONTH_ABBR[d.getUTCMonth()]}`;
   return withYear ? `${base} ${d.getUTCFullYear()}` : base;
 }
 

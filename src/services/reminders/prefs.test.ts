@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import {
   REMINDER_PROMPT,
   REMINDER_PROMPT_SIGNATURE,
+  REMINDER_REASK,
   classifyPrefsReply,
   isPrefsAsked,
+  looksLikeReminderAffirmation,
   looksLikeReminderRequest,
   readPrefs,
 } from "./prefs.js";
@@ -27,6 +29,42 @@ describe("REMINDER_PROMPT", () => {
   test("contains the signature so process-incoming can detect a reply context", () => {
     expect(REMINDER_PROMPT).toContain(REMINDER_PROMPT_SIGNATURE);
   });
+});
+
+describe("REMINDER_REASK (KER-73)", () => {
+  test("contains the signature so the reply-context branch stays armed", () => {
+    expect(REMINDER_REASK).toContain(REMINDER_PROMPT_SIGNATURE);
+  });
+});
+
+describe("looksLikeReminderAffirmation (KER-73)", () => {
+  // Yes-without-a-time → nudge for the time, don't route to the expert.
+  for (const m of [
+    "yes",
+    "yes please",
+    "Sure",
+    "ok",
+    "okay",
+    "yeah",
+    "sounds good",
+    "go for it",
+    "absolutely",
+  ]) {
+    test(`fires on: "${m}"`, () =>
+      expect(looksLikeReminderAffirmation(m)).toBe(true));
+  }
+  // Real questions / other content → must NOT be treated as an affirmation,
+  // so they route to the expert router instead of being trapped.
+  for (const m of [
+    "Why use the 3 week build and 1 week deload",
+    "what's my long run this week?",
+    "no thanks",
+    "can you make week 3 easier",
+    "tell me more",
+  ]) {
+    test(`quiet on: "${m}"`, () =>
+      expect(looksLikeReminderAffirmation(m)).toBe(false));
+  }
 });
 
 describe("classifyPrefsReply — timing (F7)", () => {
