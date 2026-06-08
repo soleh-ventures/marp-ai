@@ -185,6 +185,29 @@ export const activities = pgTable(
   ],
 );
 
+// ─── activity_streams (KER-80 — Grounded Coach, Phase 3) ────────────────────
+// Strava streams SUMMARY per activity — per-km splits, split pattern, HR
+// drift. Kept off `activities.metrics` (which is summary averages the context
+// reads) and out of `raw_payload`, because a 90-min run is ~5k samples × N
+// channels: we summarize at ingest and store only the compact result. The
+// raw time-series never reaches the LLM. Consumed by the post-run read and
+// the weekly evaluation; future M2 trait synthesis reads zone distribution
+// from here (reconciles the activity_analyses "deferred to M2" note).
+export const activityStreams = pgTable(
+  "activity_streams",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    activityId: uuid("activity_id")
+      .notNull()
+      .references(() => activities.id, { onDelete: "cascade" }),
+    summary: jsonb("summary").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [uniqueIndex("activity_streams_activity_idx").on(t.activityId)],
+);
+
 // ─── active_flags ─────────────────────────────────────────────────────────
 
 export const activeFlags = pgTable(

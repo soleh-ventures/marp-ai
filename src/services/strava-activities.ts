@@ -13,6 +13,7 @@ import {
   extractIanaFromStravaTz,
   inferTimezoneFromPhone,
 } from "./reminders/timezone.js";
+import { captureActivityStreams } from "./strava-streams.js";
 
 // Heuristic threshold for tagging an activity as a "long run". Doesn't
 // account for the runner's individual training base — that's done at a
@@ -185,6 +186,22 @@ export async function ingestStravaActivity(
 
   const newId = insertedRows[0]?.id;
   if (!newId) return { inserted: false };
+
+  // KER-80 (Phase 3): capture the streams summary (per-km splits, HR drift,
+  // split pattern) for distance-bearing runs. Best-effort — captureActivity
+  // Streams never throws, so a rate limit / sparse data / network blip can't
+  // affect ingest or the post-run pipeline. A future backfill handles history.
+  if (norm.discipline === "run" && (raw.distance ?? 0) > 0) {
+    const outcome = await captureActivityStreams({
+      accessToken,
+      stravaActivityId: activityId,
+      activityRowId: newId,
+    });
+    if (outcome !== "stored" && outcome !== "no_streams") {
+      console.log(`strava streams capture: ${outcome} for activity ${newId}`);
+    }
+  }
+
   return { inserted: true, athleteId: conn.athleteId, activityId: newId };
 }
 
