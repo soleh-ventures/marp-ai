@@ -68,6 +68,7 @@ export async function getMemoryContext(
       locale: athletes.locale,
       phone: athletes.phone,
       timezone: athletes.timezone,
+      homeCity: athletes.homeCity,
       athleticHistory: athletes.athleticHistory,
     })
     .from(athletes)
@@ -192,6 +193,7 @@ export async function getMemoryContext(
     text: formatContext({
       name: athlete.name,
       locale: athlete.locale,
+      homeCity: athlete.homeCity,
       athleticHistory: athlete.athleticHistory,
       flags: flagRows,
       block,
@@ -222,6 +224,10 @@ export type ActivityRow = {
 type FormatInput = {
   name: string | null;
   locale: string;
+  // KER-78: the runner's HOME city (location SSOT). Surfaced as part of the
+  // ground-truth line so the LLM has an authoritative city to anchor on and
+  // stops grabbing a stale one from the message log.
+  homeCity?: string | null;
   athleticHistory: unknown;
   flags: Array<{
     kind: string;
@@ -297,6 +303,47 @@ export function formatActivityLine(a: ActivityRow): string {
   return details.length > 0 ? `  ${main} — ${details.join(", ")}` : `  ${main}`;
 }
 
+// KER-78 (1b): the resolved-goal ground-truth line. Precedence (D1):
+// active race block's goalFinishTime > the onboarding target_race fallback.
+// Always carries an explicit "don't invent a time" guard — the bug was the
+// LLM confabulating a target when the real one was absent or buried.
+export function resolveGoalLine(
+  block: FormatInput["block"],
+  athleticHistory: unknown,
+): string | null {
+  const PREFIX = "Goal (ground truth): ";
+  const GUARD = " Use this; do NOT invent or change the target time.";
+
+  if (block) {
+    if (block.goalFinishTime) {
+      return `${PREFIX}${block.goalFinishTime} at ${block.raceName} (${block.raceDistance}) — from the active race plan.${GUARD}`;
+    }
+    return `${PREFIX}finish ${block.raceName} (${block.raceDistance}) — no target time set; do NOT invent one.`;
+  }
+
+  const tr = (athleticHistory as Record<string, unknown> | null)?.target_race;
+  if (tr && typeof tr === "object") {
+    const t = tr as Record<string, unknown>;
+    const name = typeof t.name === "string" ? t.name : null;
+    const dist = typeof t.distance === "string" ? t.distance : null;
+    const goalTime = typeof t.goal_time === "string" ? t.goal_time : null;
+    // C1 (review): the race DATE must stay in context — the plan generator
+    // sizes the block and places the taper from it. We stripped target_race
+    // from the JSON dump, so surface the date here or first-plan generation
+    // (no active block yet) loses it.
+    const date = typeof t.date === "string" ? t.date : null;
+    const what = [dist, name && `(${name})`].filter(Boolean).join(" ") || "their race";
+    const on = date ? ` on ${date}` : "";
+    if (goalTime) {
+      return `${PREFIX}${goalTime} for ${what}${on} — stated goal, no active race plan yet.${GUARD}`;
+    }
+    return `${PREFIX}finish ${what}${on} — stated goal, no target time set; do NOT invent one.`;
+  }
+
+  // No goal anywhere — say so rather than let the model fill the vacuum.
+  return "Goal: not on file. If asked about a target time, say you don't have one yet and offer to set it — do NOT invent a time.";
+}
+
 // Plain-text, scannable, easy for an LLM to parse and for a human to
 // debug. Each section is omitted entirely when empty so we don't waste
 // tokens on "no active flags".
@@ -311,10 +358,20 @@ export function formatContext(input: FormatInput): string {
   if (input.zonedToday) {
     const { date, weekday, time, timezone } = input.zonedToday;
     const wd = weekday.charAt(0).toUpperCase() + weekday.slice(1);
+    // KER-78: state the resolved HOME city explicitly. Measured: with only
+    // the timezone here, the LLM had no authoritative city and grabbed a
+    // stale one from the message log 44% of the time (eval:grounding). The
+    // fix is a concrete value to anchor on, not a vague "ignore conflicts".
+    const homeLine = input.homeCity
+      ? ` The runner's home is ${input.homeCity} — treat that as their ` +
+        `current city unless they explicitly say they have permanently ` +
+        `moved. Ignore any other city mentioned below (including in past ` +
+        `messages); a place named on a trip is not where they live.`
+      : ` (Home city not on file — do NOT guess it from past messages or ` +
+        `the history; if asked where they live, say you don't have it yet.)`;
     parts.push(
-      `Now (ground truth — use this, never compute the day/time yourself, ` +
-        `and ignore any conflicting city in the history below): ` +
-        `${wd}, ${date}, ${time} in ${timezone}.`,
+      `Now (ground truth — use this, never compute the day/time yourself): ` +
+        `${wd}, ${date}, ${time} in ${timezone}.${homeLine}`,
     );
   }
 
@@ -354,14 +411,25 @@ export function formatContext(input: FormatInput): string {
     );
   }
 
-  // Athletic history JSON — but strip out the plan, which we render
-  // separately below with real calendar dates. Dumping the plan as JSON
-  // forces the LLM to do weekday math; the dated rendering does not.
+  // KER-78 (1b): resolved goal as a single ground-truth line. Bug #2 was
+  // the LLM inventing a target time (said 3:10 for a sub-4:30 runner)
+  // because the goal was only buried in the history JSON or absent.
+  // Precedence (D1): an active race block's goalFinishTime wins; otherwise
+  // the onboarding target_race is a labelled fallback. Either way, ONE
+  // authoritative line with an explicit "don't invent a time" guard.
+  const goalLine = resolveGoalLine(input.block, input.athleticHistory);
+  if (goalLine) parts.push(goalLine);
+
+  // Athletic history JSON — but strip out the plan (rendered separately
+  // below with real dates) and target_race (now surfaced as the resolved
+  // goal line above; leaving it here would re-introduce a second, possibly
+  // conflicting goal the LLM could grab).
   if (input.athleticHistory && typeof input.athleticHistory === "object") {
-    const { plan: _plan, ...rest } = input.athleticHistory as Record<
-      string,
-      unknown
-    >;
+    const {
+      plan: _plan,
+      target_race: _tr,
+      ...rest
+    } = input.athleticHistory as Record<string, unknown>;
     if (Object.keys(rest).length > 0) {
       parts.push(`Athletic history: ${JSON.stringify(rest)}`);
     }
@@ -398,11 +466,10 @@ export function formatContext(input: FormatInput): string {
       ? new Date(`${input.block.raceDate.toISOString().slice(0, 10)}T00:00:00Z`).getTime()
       : input.block.raceDate.getTime();
     const days = Math.ceil((raceMs - fromMs) / 86400000);
-    const goal = input.block.goalFinishTime
-      ? ` goal ${input.block.goalFinishTime}`
-      : "";
+    // Goal is stated once, above, in the resolved goal line — this line is
+    // just the countdown so the two can't drift.
     parts.push(
-      `Active race block: ${input.block.raceName} (${input.block.raceDistance})${goal} — ${days} days away`,
+      `Active race block: ${input.block.raceName} (${input.block.raceDistance}) — ${days} days away`,
     );
   }
 

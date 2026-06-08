@@ -209,12 +209,23 @@ export async function runOnboardingTurn(
       ? validIana(parsed.extracted.timezone)
       : null;
 
+  // KER-78 (1a): onboarding asks where the runner lives, so the extracted
+  // city is their HOME — populate the location SSOT here too, not just the
+  // timezone. Without this, a runner who stated their city at onboarding
+  // had no home_city on file and "where do I live" fell back to guessing
+  // from the message log (the bug this phase fixes).
+  const extractedCity =
+    typeof parsed.extracted.city === "string" && parsed.extracted.city.trim()
+      ? parsed.extracted.city.trim()
+      : null;
+
   await db
     .update(athletes)
     .set({
       athleticHistory: newHistory,
       name: newName,
       ...(extractedTz ? { timezone: extractedTz } : {}),
+      ...(extractedCity ? { homeCity: extractedCity, homeCitySetAt: new Date() } : {}),
     })
     .where(eq(athletes.id, athleteId));
 

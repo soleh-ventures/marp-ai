@@ -187,6 +187,35 @@ describe("runOnboardingTurn", () => {
     expect(h.onboarding?.current_section).toBe("basics");
   });
 
+  // KER-78 (1a): onboarding asks where the runner lives, so the extracted
+  // city must populate the home_city SSOT (not just the timezone). Without
+  // this, "where do I live" had nothing on file and fell back to guessing.
+  test("persists extracted city to the home_city SSOT", async () => {
+    const { athleteId, messageId } = await makeAthleteWithMessage(
+      "I'm Sarah, I live in Boston",
+    );
+    mockProvider.setResponses([
+      {
+        match: /.*/,
+        text: '{"extracted":{"name":"Sarah","city":"Boston","timezone":"America/New_York"},"next_section":"complete","reply":"Got it, Sarah — Boston it is."}',
+      },
+    ]);
+    await runOnboardingTurn(athleteId, messageId, "I'm Sarah, I live in Boston");
+
+    const [row] = await db
+      .select({
+        homeCity: athletes.homeCity,
+        setAt: athletes.homeCitySetAt,
+        timezone: athletes.timezone,
+      })
+      .from(athletes)
+      .where(eq(athletes.id, athleteId))
+      .limit(1);
+    expect(row?.homeCity).toBe("Boston");
+    expect(row?.setAt).not.toBeNull();
+    expect(row?.timezone).toBe("America/New_York");
+  });
+
   test("merges across turns — arrays append, scalars overwrite", async () => {
     const { athleteId, messageId } = await makeAthleteWithMessage("anything");
     mockProvider.setResponses([

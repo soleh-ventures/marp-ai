@@ -3,6 +3,47 @@
 All notable changes to marp-ai are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are semver in `package.json`.
 
+## [0.4.0] — 2026-06-08 — Grounded Coach (Phase 1: facts SSOT)
+
+Kills a class of "MARP is lying about me" hallucinations. Root cause: the runner's
+facts lived in three places at once (the `timezone` column, free-text in
+`athletic_history`, and the last 20 chat messages), and the coaching LLM reconciled
+them and guessed. The fix is a single source of truth for location and goal, stated
+as an authoritative line in the context, plus a deterministic answer path for direct
+profile questions.
+
+A de-risk eval up front measured the problem honestly: with only the timezone in the
+ground-truth line, a stale "moved to Tokyo" message in the chat log poisoned the
+coaching reply **44% of the time**. After this phase: **0%**.
+
+### Added
+- **Location SSOT** — new `athletes.home_city` + `home_city_set_at` (migration 0013).
+  The chat location-detector now classifies a permanent **move** vs a temporary
+  **trip**: a move updates the home city + timezone; a trip shifts only the timezone
+  (for reminders) and preserves home, so "where do I live" never drifts to a travel
+  destination. Defaults to trip when ambiguous — a misread can't silently relocate you.
+- **Resolved goal line** — one authoritative goal in the context with precedence
+  (active race block's goal time > the onboarding target race), an explicit
+  "do not invent a time" guard, and the race date preserved for plan sizing.
+- **Deterministic profile readback** (`profile-readback.ts`) — "where do I live",
+  "what's my goal", "what do you know about me" are answered straight from stored
+  data with **no LLM in the loop**; edit intents ("update my profile") fall through
+  to the router so the change actually happens.
+- **`eval:grounding`** — a location-poisoning eval that is now the regression gate
+  for this fix (0/9 clear cases poisoned).
+
+### Changed
+- The "Now (ground truth …)" context line states the resolved **home city** and
+  tells the model to ignore other cities in the log; `target_race` and the plan are
+  stripped from the raw history JSON so there's exactly one goal/location to read.
+- Onboarding now persists the extracted city to the home-city SSOT, not just the
+  timezone.
+
+### Notes
+- Migration 0013 is additive + nullable (back-compat safe); runs automatically on deploy.
+- Phase 2 (plan-as-living-state + adherence) and Phase 3 (Strava depth) are tracked
+  in Linear (KER-79, KER-80) under the Grounded Coach project.
+
 ## [0.3.0] — 2026-06-07 — v1.3 Trust & Safety
 
 A two-layer safety guardrail that runs on **every** inbound message before any
