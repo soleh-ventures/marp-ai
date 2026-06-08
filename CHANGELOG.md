@@ -3,6 +3,23 @@
 All notable changes to marp-ai are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are semver in `package.json`.
 
+## [0.6.1] — 2026-06-08 — Grounded Coach: week-anchor fix (dogfood)
+
+### Fixed
+- The weekly evaluation anchored to the week containing *today*, so a "how did
+  my week go?" asked on a Monday (or any early-week day) evaluated the empty
+  just-started week instead of the one that just finished — mixing this week's
+  (empty) adherence with last week's run signals into an incoherent read. Now
+  anchors to the week of the runner's most recent activity. The proactive
+  Sunday sweep is unaffected (Sunday's week is the finishing week either way).
+  Found by running the new `dogfood-sim` harness against the live LLM.
+
+### Added (dev)
+- `src/scripts/dogfood-sim.ts` — seeds a realistic training week and runs the
+  real coaching code (context build, profile readback, weekly evaluation)
+  against the live LLM, so the coach's actual output can be eyeballed before a
+  real dogfood week. Local-DB-guarded.
+
 ## [0.6.0] — 2026-06-08 — Grounded Coach (Phase 3: Strava depth)
 
 Gives the coaching brain real data depth. Average pace/HR can't tell a negative

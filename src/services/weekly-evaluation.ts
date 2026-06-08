@@ -25,6 +25,7 @@ import { llmCall } from "./llm-call.js";
 import {
   computeWeekAdherence,
   currentWeekIndex,
+  localDay,
   renderAdherenceLine,
   type AdherenceActivity,
 } from "./plan/adherence.js";
@@ -132,9 +133,17 @@ export async function buildWeeklyEvaluation(
 
   const zoned = nowInZone(a.timezone, a.phone);
   const today = zoned.date;
-  const weekIndex = opts.weekIndex ?? currentWeekIndex(plan, today);
-
   const acts = await loadActivities(athleteId);
+
+  // Evaluate the week the runner most recently TRAINED in, not the week that
+  // happens to contain `today`. A "how did my week go?" asked on a Monday (or
+  // any early-week day) means the week that just finished — anchoring to the
+  // latest activity's date gets that right, while the proactive Sunday sweep
+  // lands on the same (finishing) week either way. Falls back to today's week
+  // when there are no activities. (Found in dogfooding.)
+  const anchorDate = acts[0] ? localDay(acts[0].startedAt, zoned.timezone) : today;
+  const weekIndex = opts.weekIndex ?? currentWeekIndex(plan, anchorDate);
+
   const adherence = computeWeekAdherence(plan, weekIndex, acts, today, zoned.timezone);
   const adherenceLine = renderAdherenceLine(adherence) ?? "No prescribed sessions were due this week.";
 

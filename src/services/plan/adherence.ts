@@ -76,7 +76,7 @@ const DOW_ORDER: DayOfWeek[] = [
 // in the same frame — bucketing by UTC mis-files a run done in the early or
 // late local hours onto the wrong day (review: HIGH). Falls back to UTC when
 // no timezone is known.
-function localDay(d: Date, tz: string | null | undefined): string {
+export function localDay(d: Date, tz: string | null | undefined): string {
   if (!tz) return d.toISOString().slice(0, 10);
   try {
     // en-CA formats as YYYY-MM-DD.
