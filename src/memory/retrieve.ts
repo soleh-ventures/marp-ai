@@ -11,6 +11,11 @@ import {
 import { getAthleticHistory } from "../flows/onboarding.js";
 import { getStoredPlan } from "../services/plan/storage.js";
 import { renderPlanForContext, type Plan } from "../services/plan/types.js";
+import {
+  computeWeekAdherence,
+  currentWeekIndex,
+  renderAdherenceLine,
+} from "../services/plan/adherence.js";
 import { nowInZone, type ZonedNow } from "../services/reminders/timezone.js";
 
 // How many recent inbound + outbound messages to surface to the LLM as
@@ -438,6 +443,22 @@ export function formatContext(input: FormatInput): string {
   // Stored plan, rendered with concrete dates per session.
   if (input.plan) {
     parts.push(renderPlanForContext(input.plan));
+
+    // KER-79 (Phase 2): computed adherence for the current week, so the LLM
+    // reconciles prescription vs actual itself instead of conflating them
+    // (bug #3: a 5k of a prescribed 10k long run was being called a long
+    // run). Current week is derived from start_date + today — no cursor.
+    if (input.zonedToday && input.activities && input.activities.length > 0) {
+      const wk = currentWeekIndex(input.plan, input.zonedToday.date);
+      const wa = computeWeekAdherence(
+        input.plan,
+        wk,
+        input.activities,
+        input.zonedToday.date,
+      );
+      const adherence = renderAdherenceLine(wa);
+      if (adherence) parts.push(adherence);
+    }
   }
 
   if (input.stravaStatus) {
