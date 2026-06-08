@@ -3,6 +3,37 @@
 All notable changes to marp-ai are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are semver in `package.json`.
 
+## [0.6.0] — 2026-06-08 — Grounded Coach (Phase 3: Strava depth)
+
+Gives the coaching brain real data depth. Average pace/HR can't tell a negative
+split from a positive one or catch cardiac drift; this pulls Strava's
+per-sample streams and reads them like a coach.
+
+### Added
+- **Streams summarizer** (`strava-streams.ts`): per-km splits, split pattern
+  (negative/even/positive), and HR drift, computed from the time/distance/
+  heartrate channels. `activity_streams` table (migration 0015) stores the
+  compact summary — the raw ~5k-sample arrays never reach the LLM.
+- Captured **best-effort at ingest** for every distance-bearing activity —
+  runs, rides, swims, walks, hikes (not just runs; bug #5). Fire-and-forget,
+  so it never delays the runner's post-run reply.
+- **Consumed everywhere:** the per-run coach read, the weekly evaluation, and
+  the coaching context now cite the real shape ("negative split, HR drift
+  +7%, km 4:30–5:00"), not just the average.
+- **Activity descriptions:** the runner's own Strava notes are captured and
+  surfaced as a coaching signal (sanitized — runner-controlled free text is
+  stripped of control chars/quotes before it enters the prompt).
+- **History backfill** (`streams:backfill`): walks existing activities with no
+  streams summary and fetches them, throttled (inter-call delay, per-run cap,
+  refreshes the token on expiry, stops on a 429). Idempotent; re-run to continue.
+
+### Notes
+- Migration 0015 is additive (back-compat safe); auto-runs on deploy.
+- Streams logic is unit-tested on synthetic data; the live Strava round-trip
+  (endpoint shape, real per-app rate budget) is verified on first real use.
+- Reconciles the M1 `activity_analyses` "streams-based zone distribution
+  deferred to M2" note — M2 trait synthesis (KER-44) reads from here.
+
 ## [0.5.0] — 2026-06-08 — Grounded Coach (Phase 2: the coaching brain)
 
 Makes MARP read your week like a coach instead of a logger. Two halves: a
