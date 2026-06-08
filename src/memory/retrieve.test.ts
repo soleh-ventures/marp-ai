@@ -384,6 +384,56 @@ describe("formatContext", () => {
     expect(text).toMatch(/ignore any other city/i);
   });
 
+  // KER-78 (1b): goal precedence (active block > target_race fallback) and
+  // the "don't invent a time" guard. This is the deterministic goal-eval.
+  test("resolved goal line: active race block wins", () => {
+    const text = formatContext({
+      name: "K",
+      locale: "en",
+      athleticHistory: { target_race: { name: "Berlin", distance: "marathon", goal_time: "4:30:00" } },
+      flags: [],
+      block: {
+        raceName: "NYC Marathon",
+        raceDate: new Date("2026-11-01"),
+        raceDistance: "marathon",
+        goalFinishTime: "3:10:00",
+      },
+      messages: [],
+    });
+    // Block goal is authoritative; the history goal must NOT appear as a goal.
+    expect(text).toContain("Goal (ground truth): 3:10:00 at NYC Marathon");
+    expect(text).not.toContain("4:30:00");
+    // target_race is stripped from the JSON dump (no second goal to grab).
+    expect(text).not.toContain("target_race");
+  });
+
+  test("resolved goal line: target_race fallback when no block", () => {
+    const text = formatContext({
+      name: "K",
+      locale: "en",
+      athleticHistory: { target_race: { name: "Berlin", distance: "marathon", goal_time: "4:30:00" } },
+      flags: [],
+      block: undefined,
+      messages: [],
+    });
+    expect(text).toContain("Goal (ground truth): 4:30:00 for marathon (Berlin)");
+    expect(text).toMatch(/do NOT invent/i);
+    expect(text).not.toContain("target_race");
+  });
+
+  test("resolved goal line: says not-on-file and forbids inventing when absent", () => {
+    const text = formatContext({
+      name: "K",
+      locale: "en",
+      athleticHistory: { experience: "intermediate" },
+      flags: [],
+      block: undefined,
+      messages: [],
+    });
+    expect(text).toMatch(/Goal: not on file/i);
+    expect(text).toMatch(/do NOT invent a time/i);
+  });
+
   test("ground-truth line says home is unknown when not set", () => {
     const text = formatContext({
       name: "Kemal",

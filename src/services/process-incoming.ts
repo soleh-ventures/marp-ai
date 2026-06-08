@@ -50,6 +50,11 @@ import {
   looksLikeTimezoneChange,
 } from "./timezone-override.js";
 import {
+  profileQuestionKind,
+  buildProfileReadback,
+  type ProfileQuestionKind,
+} from "./profile-readback.js";
+import {
   buildConnectReply,
   buildOnboardingStravaOffer,
   getStravaConnectStatus,
@@ -365,6 +370,10 @@ export async function processIncomingMessage(
   let locChange: LocationChange | null = null;
   // RC3: holds the parsed reminder request when that branch fires.
   let reminderReq: PrefsCaptureResult = { kind: "ambiguous" };
+  // KER-78 (1d): holds the profile-question kind + the deterministic
+  // readback when that branch fires (assigned in its else-if condition).
+  let profileKind: ProfileQuestionKind | null = null;
+  let profileReadback: string | null = null;
   if (looksLikeDeletionRequest(body)) {
     // First-phase deletion request — reply with the confirmation prompt
     // regardless of onboarding state. The deletion-confirmation branch
@@ -545,6 +554,16 @@ export async function processIncomingMessage(
       replyText = result.finalText.trim();
       routerFrame = result.frame;
     }
+  } else if (
+    (profileKind = profileQuestionKind(body)) !== null &&
+    (profileReadback = await buildProfileReadback(athleteId, profileKind)) !== null
+  ) {
+    // KER-78 (1d): direct factual question about their own profile ("where
+    // do I live?", "what's my goal?"). Answer from stored data with NO LLM
+    // — the whole bug class is the model confabulating these. The cheap
+    // regex pre-check runs first; the DB read only happens on a match, and
+    // falls through to the router if it can't build an answer.
+    replyText = profileReadback;
   } else if (
     looksLikeTimezoneChange(body) &&
     (locChange = await extractLocationFromMessage({
