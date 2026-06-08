@@ -3,6 +3,43 @@
 All notable changes to marp-ai are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are semver in `package.json`.
 
+## [0.5.0] — 2026-06-08 — Grounded Coach (Phase 2: the coaching brain)
+
+Makes MARP read your week like a coach instead of a logger. Two halves: a
+deterministic adherence engine (what you were prescribed vs what you actually
+did) and a holistic end-of-week evaluation that uses it.
+
+### Added
+- **Adherence engine** (`plan/adherence.ts`): joins each prescribed session to
+  your actual activities by local calendar day + discipline, classifying every
+  one as done / short / over / wrong-discipline / missed / upcoming, plus
+  unplanned extras. This kills the "ran 5k of a prescribed 10k long run, still
+  called it a long run" bug — adherence is now a computed fact in the coaching
+  context, not an LLM guess. The current training week is derived from the
+  plan's `start_date` (no stored cursor → no migration, old plans just work).
+- **Holistic weekly evaluation** (`weekly-evaluation.ts` + prompt): a
+  coach-to-athlete read of the week — the result, what went well, the one thing
+  to sharpen — reasoned across adherence, physiological signals (RPE / HR drift
+  / splits), injury flags, and where you are in the block. Live now reactively:
+  ask "how did my week go?" and you get the real evaluation.
+- **Coach-decided plan adjustment**: when the evaluation judges next week should
+  change, MARP applies the change and tells you what and why, with a one-tap
+  revert ("keep it as it was"). Health red flags are surfaced and proposed,
+  never auto-applied. The proactive end-of-week send + auto-apply ride the
+  weekly sweep, gated behind `PROACTIVE_OUTBOUND` until the prod number is live.
+- `weekly_evaluations` ledger (migration 0014): one row per athlete-week
+  (idempotency) + the pre-change plan snapshot (revert).
+
+### Changed
+- The weekly scheduler tick now runs the evaluation sweep, **superseding** M1's
+  weekly retro-proposal (the evaluation is the superset — it always gives a
+  read and acts when warranted). M1's event-driven retro is unchanged.
+
+### Notes
+- Migration 0014 is additive (back-compat safe); auto-runs on deploy.
+- Adherence fixtures are currently synthetic; a real week of dogfood data turns
+  them real. Phase 3 (Strava streams depth, KER-80) deepens the evaluation next.
+
 ## [0.4.0] — 2026-06-08 — Grounded Coach (Phase 1: facts SSOT)
 
 Kills a class of "MARP is lying about me" hallucinations. Root cause: the runner's
