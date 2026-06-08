@@ -14,6 +14,17 @@ All notable changes to marp-ai are documented here. Format loosely follows
   Sunday sweep is unaffected (Sunday's week is the finishing week either way).
   Found by running the new `dogfood-sim` harness against the live LLM.
 
+### Changed
+- Connecting Strava now **auto-backfills streams** for the synced history in
+  the background (the 60-day connect pull inserts via the LIST endpoint, which
+  bypasses the ingest streams capture). Throttled + best-effort + token-
+  refreshing; runs after the connect confirmation so it never blocks. New
+  users no longer need the manual `streams:backfill`. Extracted the per-athlete
+  loop into `strava-streams-backfill.ts`, shared by the connect flow + the
+  ops script. (Already-connected users: run `streams:backfill <athleteId>`
+  once for old history; no reconnect — the existing `activity:read_all` scope
+  already covers streams.)
+
 ### Added (dev)
 - `src/scripts/dogfood-sim.ts` — seeds a realistic training week and runs the
   real coaching code (context build, profile readback, weekly evaluation)

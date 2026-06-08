@@ -7,6 +7,7 @@ import { verifyMagicToken } from "../services/strava-magic-link.js";
 import { buildAuthorizationUrl, exchangeCode } from "../services/strava-api.js";
 import { upsertStravaConnection } from "../services/strava-connections.js";
 import { backfillStravaHistory } from "../services/strava-backfill.js";
+import { backfillAthleteStreams } from "../services/strava-streams-backfill.js";
 import { sendWhatsApp } from "../services/twilio-send.js";
 import { getAthleticHistory, runOnboardingTurn } from "../flows/onboarding.js";
 
@@ -140,6 +141,16 @@ stravaAuth.get("/callback", async (c) => {
         // onboarding question now so they answer it directly.
         const kickoff = shouldKickoff ? await buildOnboardingKickoff(athleteId) : "";
         await sendWhatsApp(phone, "✅ Strava connected!" + tail + kickoff);
+        // KER-80 (Phase 3): backfill streams (splits / HR drift) for the
+        // just-synced history. The 60-day backfill above inserts via the LIST
+        // endpoint, which bypasses the ingest streams capture, so do it here —
+        // throttled + best-effort, AFTER the confirmation so it never blocks
+        // connect. New activities still capture streams live at ingest.
+        void backfillAthleteStreams({ athleteId })
+          .then((r) => {
+            if (r.stored > 0) console.log(`strava connect: streams backfilled ${r.stored} for ${athleteId}`);
+          })
+          .catch((err) => console.error("strava connect: streams backfill failed", err));
       })().catch((err) =>
         console.error("strava callback: confirm/kickoff send failed", err),
       );
