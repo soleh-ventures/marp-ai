@@ -55,6 +55,13 @@ import {
   type ProfileQuestionKind,
 } from "./profile-readback.js";
 import {
+  looksLikeWeekReviewRequest,
+  buildWeeklyEvaluation,
+  looksLikeRevertRequest,
+  revertLastWeeklyAdjustment,
+  type WeeklyEvaluation,
+} from "./weekly-evaluation.js";
+import {
   buildConnectReply,
   buildOnboardingStravaOffer,
   getStravaConnectStatus,
@@ -374,6 +381,12 @@ export async function processIncomingMessage(
   // readback when that branch fires (assigned in its else-if condition).
   let profileKind: ProfileQuestionKind | null = null;
   let profileReadback: string | null = null;
+  // KER-79 (Phase 2): holds the coach evaluation when the runner asks how
+  // their week went (reactive, read-only path).
+  let weeklyEval: WeeklyEvaluation | null = null;
+  // KER-79 (Phase 2): holds the confirmation when the runner reverts a
+  // coach-applied weekly adjustment ("keep it as it was").
+  let revertReply: string | null = null;
   if (looksLikeDeletionRequest(body)) {
     // First-phase deletion request — reply with the confirmation prompt
     // regardless of onboarding state. The deletion-confirmation branch
@@ -564,6 +577,25 @@ export async function processIncomingMessage(
     // regex pre-check runs first; the DB read only happens on a match, and
     // falls through to the router if it can't build an answer.
     replyText = profileReadback;
+  } else if (
+    looksLikeRevertRequest(body) &&
+    (revertReply = await revertLastWeeklyAdjustment(athleteId)) !== null
+  ) {
+    // KER-79 (Phase 2): runner is undoing a coach-applied weekly adjustment
+    // ("keep it as it was"). Restore the pre-change plan snapshot. Only fires
+    // when there's a recent applied adjustment to revert; otherwise the cheap
+    // regex short-circuits to null and we fall through to routing.
+    replyText = revertReply;
+  } else if (
+    looksLikeWeekReviewRequest(body) &&
+    (weeklyEval = await buildWeeklyEvaluation(athleteId, { messageId })) !== null
+  ) {
+    // KER-79 (Phase 2): "how did my week go?" → the coach evaluation grounded
+    // in computed adherence + week signals. Read-only on a reactive ask: we
+    // don't mutate the plan here (the proactive end-of-week path is where a
+    // coach-decided adjustment is applied). Falls through to the router if
+    // there's no plan to evaluate (buildWeeklyEvaluation returns null).
+    replyText = weeklyEval.message;
   } else if (
     looksLikeTimezoneChange(body) &&
     (locChange = await extractLocationFromMessage({

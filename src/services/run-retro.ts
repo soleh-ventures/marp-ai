@@ -175,7 +175,7 @@ function strOrNull(v: unknown): string | null {
   return typeof v === "string" && v.trim().length > 0 ? v.trim() : null;
 }
 
-async function loadWeekRows(athleteId: string): Promise<WeekRow[]> {
+export async function loadWeekRows(athleteId: string): Promise<WeekRow[]> {
   const since = new Date(Date.now() - WEEK_WINDOW_DAYS * 24 * 60 * 60 * 1000);
   return db
     .select({
@@ -188,14 +188,14 @@ async function loadWeekRows(athleteId: string): Promise<WeekRow[]> {
     .orderBy(desc(activityAnalyses.createdAt));
 }
 
-async function openFlags(athleteId: string): Promise<Array<{ kind: string; body: string }>> {
+export async function openFlags(athleteId: string): Promise<Array<{ kind: string; body: string }>> {
   return db
     .select({ kind: activeFlags.kind, body: activeFlags.body })
     .from(activeFlags)
     .where(and(eq(activeFlags.athleteId, athleteId), isNull(activeFlags.resolvedAt)));
 }
 
-function summarizeFeeling(feeling: unknown): string {
+export function summarizeFeeling(feeling: unknown): string {
   const f = (feeling ?? null) as Record<string, unknown> | null;
   if (!f) return "(no feeling)";
   const effort = (f.effort ?? {}) as Record<string, unknown>;

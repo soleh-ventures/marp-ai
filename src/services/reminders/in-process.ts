@@ -23,7 +23,7 @@
 
 import { config } from "../../config.js";
 import { runReminderScheduler } from "./scheduler.js";
-import { runWeeklyRetroSweep } from "../run-retro.js";
+import { runWeeklyEvaluationSweep } from "../weekly-evaluation.js";
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let running = false;
@@ -43,16 +43,19 @@ async function tick(): Promise<void> {
   } catch (err) {
     console.error("reminder tick failed:", (err as Error).message);
   }
-  // M1 (T5): weekly retro sweep rides the same tick. Idempotent per athlete-
-  // week, so the many Sunday ticks collapse to one proposal. Independent
-  // try/catch — a reminder failure must not skip the retro and vice-versa.
+  // KER-79 (Phase 2): end-of-week coach evaluation rides the same tick.
+  // Supersedes M1's weekly retro-proposal (which only spoke up to propose a
+  // change); the evaluation always gives the runner their week's read and,
+  // when warranted, applies the adjustment itself. Idempotent per athlete-
+  // week. The event-driven retro (maybeEventRetro, on a strong post-run
+  // signal) is unchanged and still fires from the ingest path.
   try {
-    const retro = await runWeeklyRetroSweep({ now: new Date() });
-    if (retro.proposed > 0) {
-      console.log(`weekly retro: ${JSON.stringify(retro)}`);
+    const evalSweep = await runWeeklyEvaluationSweep({ now: new Date() });
+    if (evalSweep.ran > 0) {
+      console.log(`weekly evaluation: ${JSON.stringify(evalSweep)}`);
     }
   } catch (err) {
-    console.error("weekly retro sweep failed:", (err as Error).message);
+    console.error("weekly evaluation sweep failed:", (err as Error).message);
   } finally {
     running = false;
   }
