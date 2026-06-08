@@ -327,9 +327,13 @@ export function formatActivityLine(a: ActivityRow): string {
   // KER-80: append the streams shape when we have it.
   if (a.streamNote) base += ` [${a.streamNote}]`;
   // KER-80: the runner's own note on the activity (Strava description) is a
-  // strong coaching signal — surface it, trimmed.
-  const desc = typeof m.description === "string" ? m.description.trim() : "";
-  if (desc) base += ` — note: "${desc.length > 140 ? `${desc.slice(0, 140)}…` : desc}"`;
+  // strong coaching signal. It's runner-controlled free text, so sanitize
+  // before it enters the prompt: collapse newlines/quotes/control chars to
+  // spaces (no breaking out of the line / forging context) and cap length.
+  // Framed as untrusted runner text, not authoritative data (review).
+  const rawDesc = typeof m.description === "string" ? m.description : "";
+  const desc = rawDesc.replace(/[\x00-\x1f]+/g, " ").replace(/["`]/g, "").replace(/\s+/g, " ").trim();
+  if (desc) base += ` — runner note (their words): ${desc.length > 140 ? `${desc.slice(0, 140)}…` : desc}`;
   return base;
 }
 

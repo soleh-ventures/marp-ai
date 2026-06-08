@@ -20,6 +20,7 @@
 import { and, desc, eq, isNotNull, isNull } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { activities, activityStreams, stravaConnections } from "../db/schema.js";
+import { findByAthleteId } from "../services/strava-connections.js";
 import { getFreshAccessToken, StravaConnectionRevokedError } from "../services/strava-tokens.js";
 import { captureActivityStreams } from "../services/strava-streams.js";
 
@@ -90,14 +91,31 @@ async function main(): Promise<void> {
     const todo = await activitiesNeedingStreams(conn.athleteId, cap - processed);
     console.log(`athlete ${conn.athleteId}: ${todo.length} activities need streams`);
 
+    let abandonAthlete = false;
     for (const a of todo) {
-      if (processed >= cap) break;
+      if (processed >= cap || abandonAthlete) break;
+      // Strava ids are numeric; guard against a non-numeric sourceId so we
+      // don't fire GET /activities/NaN/streams.
+      const sid = Number(a.sourceId);
+      if (!Number.isFinite(sid)) continue;
       processed++;
-      const outcome = await captureActivityStreams({
-        accessToken: token,
-        stravaActivityId: Number(a.sourceId),
-        activityRowId: a.id,
-      });
+      let outcome = await captureActivityStreams({ accessToken: token, stravaActivityId: sid, activityRowId: a.id });
+
+      // The access token can expire mid-run (Strava TTL ~6h). On 401, refresh
+      // once and retry — otherwise a long backfill silently no-ops the rest.
+      if (outcome === "unauthorized") {
+        try {
+          const fresh = await findByAthleteId(conn.athleteId);
+          if (!fresh) { abandonAthlete = true; continue; }
+          token = await getFreshAccessToken(fresh);
+          outcome = await captureActivityStreams({ accessToken: token, stravaActivityId: sid, activityRowId: a.id });
+        } catch {
+          console.log(`athlete ${conn.athleteId}: token refresh failed, skipping rest`);
+          abandonAthlete = true;
+          continue;
+        }
+      }
+
       if (outcome === "stored") stored++;
       else if (outcome === "no_streams") skipped++;
       else if (outcome === "rate_limited") {

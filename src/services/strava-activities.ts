@@ -195,19 +195,21 @@ export async function ingestStravaActivity(
   // KER-80 (Phase 3): capture the streams summary (per-km splits, HR drift,
   // split pattern) for any DISTANCE-bearing activity — runs, rides, swims,
   // walks, hikes — not just runs (bug #5: "include my other activities too").
-  // The summarizer is sport-agnostic. Strength/mobility have no distance, so
-  // they're skipped by the distance check. Best-effort — captureActivity
-  // Streams never throws, so a rate limit / sparse data / network blip can't
-  // affect ingest or the post-run pipeline. A future backfill handles history.
+  // The summarizer is sport-agnostic; strength/mobility have no distance.
+  // FIRE-AND-FORGET: this is a 2nd Strava call, and a best-effort enrichment
+  // must not sit on the runner's post-run reply path (review). It runs
+  // concurrently with the post-run pipeline; captureActivityStreams never
+  // throws. A future backfill handles history.
   if ((raw.distance ?? 0) > 0 && norm.discipline !== "other") {
-    const outcome = await captureActivityStreams({
+    void captureActivityStreams({
       accessToken,
       stravaActivityId: activityId,
       activityRowId: newId,
+    }).then((outcome) => {
+      if (outcome !== "stored" && outcome !== "no_streams") {
+        console.log(`strava streams capture: ${outcome} for activity ${newId}`);
+      }
     });
-    if (outcome !== "stored" && outcome !== "no_streams") {
-      console.log(`strava streams capture: ${outcome} for activity ${newId}`);
-    }
   }
 
   return { inserted: true, athleteId: conn.athleteId, activityId: newId };

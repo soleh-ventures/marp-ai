@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  nearRateLimit,
   renderStreamAnnotation,
   summarizeStreams,
   type StravaStreams,
@@ -93,20 +92,13 @@ describe("renderStreamAnnotation", () => {
   });
 });
 
-describe("nearRateLimit", () => {
-  test("true when short-window usage is at/over the margin", () => {
-    const h = new Headers({ "x-ratelimit-usage": "95,500", "x-ratelimit-limit": "100,1000" });
-    expect(nearRateLimit(h)).toBe(true);
-  });
-  test("true when daily usage is hot", () => {
-    const h = new Headers({ "x-ratelimit-usage": "10,950", "x-ratelimit-limit": "100,1000" });
-    expect(nearRateLimit(h)).toBe(true);
-  });
-  test("false with headroom", () => {
-    const h = new Headers({ "x-ratelimit-usage": "10,100", "x-ratelimit-limit": "100,1000" });
-    expect(nearRateLimit(h)).toBe(false);
-  });
-  test("false when headers absent", () => {
-    expect(nearRateLimit(new Headers())).toBe(false);
+describe("HR drift halves are non-overlapping", () => {
+  test("a flat-HR run reads ~0 drift (no boundary double-count)", () => {
+    const s: StravaStreams = {
+      time: { data: [0, 60, 120, 180, 240, 300] },
+      distance: { data: [0, 200, 400, 600, 800, 1000] },
+      heartrate: { data: [150, 150, 150, 150, 150, 150] },
+    };
+    expect(summarizeStreams(s)?.hr_drift_pct).toBe(0);
   });
 });

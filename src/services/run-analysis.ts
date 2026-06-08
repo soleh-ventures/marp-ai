@@ -177,7 +177,7 @@ export async function analyzeActivity(input: {
   const streamMap = await loadStreamSummaries([input.activityId]);
   const streamSummary = streamMap.get(input.activityId) ?? null;
   const streamLine = streamSummary
-    ? `# Stream detail (per-km splits, split pattern, HR drift)\n${renderStreamAnnotation(streamSummary)}\n\n`
+    ? `# Stream detail (AUTHORITATIVE — from full per-sample streams; prefer this over any split_pattern / hr_drift in the objective stats above if they differ)\n${renderStreamAnnotation(streamSummary)}\n\n`
     : "";
 
   // Planned-session context (best effort).

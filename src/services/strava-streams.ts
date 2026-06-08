@@ -110,9 +110,13 @@ export function summarizeStreams(streams: StravaStreams): StreamSummary | null {
   let max_hr: number | null = null;
   if (hr) {
     avg_hr = Math.round(mean(hr) ?? 0);
-    max_hr = Math.round(Math.max(...hr));
+    // reduce, not Math.max(...hr) — a long activity is ~thousands of samples
+    // and the arg-spread can blow the call stack.
+    max_hr = Math.round(hr.reduce((a, b) => (b > a ? b : a), hr[0]!));
+    // Non-overlapping halves — the boundary sample belongs to the first half
+    // only (review: it was double-counted, biasing drift on short runs).
     const firstHr = mean(hr.slice(0, midIdx + 1));
-    const secondHr = mean(hr.slice(midIdx));
+    const secondHr = mean(hr.slice(midIdx + 1));
     if (firstHr && secondHr && firstHr > 0) {
       hr_drift_pct = Math.round(((secondHr - firstHr) / firstHr) * 1000) / 10;
     }
@@ -133,11 +137,12 @@ export function summarizeStreams(streams: StravaStreams): StreamSummary | null {
 
 export type StreamFetchResult =
   | { ok: true; summary: StreamSummary | null }
-  | { ok: false; reason: "rate_limited" | "no_streams" | "error" };
+  | { ok: false; reason: "rate_limited" | "no_streams" | "unauthorized" | "error" };
 
-// GET /activities/{id}/streams. Returns a summary, or a typed reason. Reads
-// the X-RateLimit-Usage / -Limit headers so a backfill can back off before
-// Strava starts 429-ing (100 req/15min, 1000/day per app).
+// GET /activities/{id}/streams. Returns a summary, or a typed reason
+// (rate_limited / unauthorized / no_streams / error). The backfill reacts to
+// the rate_limited reason (Strava: 100 req/15min, 1000/day per app) by
+// stopping, on top of a fixed inter-call delay.
 export async function fetchActivityStreams(
   accessToken: string,
   activityId: number,
@@ -152,6 +157,9 @@ export async function fetchActivityStreams(
     return { ok: false, reason: "error" };
   }
   if (res.status === 429) return { ok: false, reason: "rate_limited" };
+  // 401 = the access token expired/was revoked. Distinguished so a long
+  // backfill can refresh-or-abort instead of silently churning dead calls.
+  if (res.status === 401) return { ok: false, reason: "unauthorized" };
   if (!res.ok) return { ok: false, reason: "error" };
   let json: unknown;
   try {
@@ -176,7 +184,13 @@ export async function loadStreamSummaries(
     .select({ activityId: activityStreams.activityId, summary: activityStreams.summary })
     .from(activityStreams)
     .where(inArray(activityStreams.activityId, activityIds));
-  for (const r of rows) out.set(r.activityId, r.summary as StreamSummary);
+  for (const r of rows) {
+    const s = r.summary as StreamSummary;
+    // Shape-guard the jsonb read — a malformed/old-shape row must not flow
+    // into renderStreamAnnotation (which runs inside the un-try-wrapped
+    // context build).
+    if (s && Array.isArray(s.km_splits)) out.set(r.activityId, s);
+  }
   return out;
 }
 
@@ -184,6 +198,7 @@ export async function loadStreamSummaries(
 // drift, and the fastest/slowest km. Compact enough to append to an activity
 // line in context. Returns "" when there's nothing worth saying.
 export function renderStreamAnnotation(s: StreamSummary): string {
+  if (!s || !Array.isArray(s.km_splits)) return ""; // defend against bad jsonb
   const bits: string[] = [];
   if (s.split_pattern !== "even") bits.push(`${s.split_pattern} split`);
   if (s.hr_drift_pct !== null && Math.abs(s.hr_drift_pct) >= 3) {
@@ -217,7 +232,7 @@ export async function captureActivityStreams(input: {
   accessToken: string;
   stravaActivityId: number;
   activityRowId: string;
-}): Promise<"stored" | "no_streams" | "rate_limited" | "error"> {
+}): Promise<"stored" | "no_streams" | "rate_limited" | "unauthorized" | "error"> {
   try {
     const res = await fetchActivityStreams(input.accessToken, input.stravaActivityId);
     if (!res.ok) return res.reason;
@@ -227,18 +242,4 @@ export async function captureActivityStreams(input: {
   } catch {
     return "error";
   }
-}
-
-// True when the rate-limit headers say we're close to the 15-min cap and a
-// backfill should pause. Strava sends "X-RateLimit-Usage: short,daily" and
-// "X-RateLimit-Limit: short,daily".
-export function nearRateLimit(headers: Headers, marginPct = 0.9): boolean {
-  const usage = headers.get("x-ratelimit-usage");
-  const limit = headers.get("x-ratelimit-limit");
-  if (!usage || !limit) return false;
-  const [uShort, uDaily] = usage.split(",").map((s) => parseInt(s, 10));
-  const [lShort, lDaily] = limit.split(",").map((s) => parseInt(s, 10));
-  const shortHot = lShort && uShort !== undefined ? uShort / lShort >= marginPct : false;
-  const dailyHot = lDaily && uDaily !== undefined ? uDaily / lDaily >= marginPct : false;
-  return shortHot || dailyHot;
 }
