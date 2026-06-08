@@ -166,6 +166,12 @@ export function getRetroProposalPrompt(): string {
   return loadFile("retro-proposal.md").body;
 }
 
+// KER-79 (Phase 2): the end-of-week coach evaluation — results + what went
+// well + what to improve, plus a holistic decision on adjusting next week.
+export function getWeeklyEvaluationPrompt(): string {
+  return loadFile("weekly-evaluation.md").body;
+}
+
 // S1 (KER-29): safety-triage classifier prompt, run before routing.
 export function getSafetyTriagePrompt(): string {
   return loadFile("safety-triage.md").body;
@@ -188,6 +194,7 @@ export function validateAllPrompts(): void {
   loadFile("post-run-analysis.md");
   loadFile("feeling-extract.md");
   loadFile("retro-proposal.md");
+  loadFile("weekly-evaluation.md");
   loadFile("safety-triage.md");
   for (const d of DOMAINS) {
     loadFile(`domains/${d}.md`);
