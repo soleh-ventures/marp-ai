@@ -1,5 +1,9 @@
-import { describe, expect, test } from "bun:test";
-import { looksLikeTimezoneChange } from "./timezone-override.js";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { eq, sql } from "drizzle-orm";
+import { db } from "../db/client.js";
+import { assertNotProductionDb } from "../db/test-guard.js";
+import { athletes } from "../db/schema.js";
+import { applyLocationChange, looksLikeTimezoneChange } from "./timezone-override.js";
 
 // The pre-filter is the cost gate: it decides whether we pay for a Haiku
 // extraction at all. It should fire on real location announcements and
@@ -36,4 +40,72 @@ describe("looksLikeTimezoneChange", () => {
       expect(looksLikeTimezoneChange(msg)).toBe(false);
     });
   }
+});
+
+// KER-78 (1a / D2): the DB write path. A permanent MOVE updates the
+// home-city SSOT + timezone; a temporary TRIP shifts only the timezone and
+// PRESERVES home — this is what stops "where do I live" drifting to a
+// travel destination.
+describe("applyLocationChange (DB)", () => {
+  beforeEach(async () => {
+    assertNotProductionDb();
+    await db.execute(sql`TRUNCATE TABLE athletes RESTART IDENTITY CASCADE`);
+  });
+
+  async function seed(): Promise<string> {
+    const [a] = await db
+      .insert(athletes)
+      .values({ phone: "+15551112222", name: "Mover", timezone: "Europe/Berlin", homeCity: "Berlin" })
+      .returning();
+    if (!a) throw new Error("insert failed");
+    return a.id;
+  }
+
+  async function row(id: string) {
+    const [r] = await db
+      .select({ timezone: athletes.timezone, homeCity: athletes.homeCity, setAt: athletes.homeCitySetAt })
+      .from(athletes)
+      .where(eq(athletes.id, id))
+      .limit(1);
+    if (!r) throw new Error("not found");
+    return r;
+  }
+
+  test("move updates home city + timezone", async () => {
+    const id = await seed();
+    const reply = await applyLocationChange(id, {
+      timezone: "Asia/Tokyo",
+      city: "Tokyo",
+      kind: "move",
+    });
+    const r = await row(id);
+    expect(r.homeCity).toBe("Tokyo");
+    expect(r.timezone).toBe("Asia/Tokyo");
+    expect(r.setAt).not.toBeNull();
+    expect(reply).toContain("Tokyo");
+  });
+
+  test("trip shifts timezone but preserves home city", async () => {
+    const id = await seed();
+    await applyLocationChange(id, {
+      timezone: "Asia/Tokyo",
+      city: "Tokyo",
+      kind: "trip",
+    });
+    const r = await row(id);
+    expect(r.homeCity).toBe("Berlin"); // unchanged
+    expect(r.timezone).toBe("Asia/Tokyo"); // shifted for reminders
+  });
+
+  test("move without a city name updates timezone only, leaves home", async () => {
+    const id = await seed();
+    await applyLocationChange(id, {
+      timezone: "America/New_York",
+      city: null,
+      kind: "move",
+    });
+    const r = await row(id);
+    expect(r.homeCity).toBe("Berlin"); // no city given → don't blank home
+    expect(r.timezone).toBe("America/New_York");
+  });
 });
