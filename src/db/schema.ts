@@ -554,3 +554,50 @@ export const planAdjustments = pgTable(
       .where(sql`${t.trigger} = 'weekly_sweep'`),
   ],
 );
+
+// ─── weekly_evaluations (KER-79 — Grounded Coach, Phase 2) ──────────────────
+// The end-of-week coach evaluation ledger. One row per (athlete, week) — the
+// idempotency dimension so the many Sunday ticks collapse to a single
+// evaluation even on weeks with NO plan change (the always-evaluate vision,
+// which plan_adjustments can't hold since it only records changes). Also the
+// revert store: beforePlan snapshots the plan prior to a coach-applied change
+// so "keep it as it was" can restore it. Future: the KER-43 flywheel reads
+// this as the adherence/outcome signal.
+export const weeklyEvaluations = pgTable(
+  "weekly_evaluations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    athleteId: uuid("athlete_id")
+      .notNull()
+      .references(() => athletes.id, { onDelete: "cascade" }),
+    // Athlete-local Monday (YYYY-MM-DD) of the evaluated week.
+    weekStart: text("week_start").notNull(),
+    weekIndex: integer("week_index"),
+    // The runner-facing coach evaluation text that was generated.
+    evaluation: text("evaluation").notNull(),
+    // Whether the coach changed the plan this week, and whether a medical
+    // red flag forced propose-not-apply.
+    adjusted: boolean("adjusted").notNull().default(false),
+    safetyHold: boolean("safety_hold").notNull().default(false),
+    changeSummary: text("change_summary"),
+    rationale: text("rationale"),
+    // Revert snapshot: the plan as it was BEFORE a coach-applied change (null
+    // when nothing was applied), and the applied result.
+    beforePlan: jsonb("before_plan"),
+    afterPlan: jsonb("after_plan"),
+    // "evaluated" (no change) | "applied" (coach changed it) | "reverted"
+    // (runner undid it) | "proposed" (safety_hold — awaiting confirm).
+    status: text("status").notNull().default("evaluated"),
+    // When the proactive message actually went out (null while outbound is
+    // gated off, or for the reactive path).
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("weekly_evaluations_athlete_created_idx").on(t.athleteId, t.createdAt),
+    // One evaluation per athlete-week.
+    uniqueIndex("weekly_evaluations_week_idem_idx").on(t.athleteId, t.weekStart),
+  ],
+);

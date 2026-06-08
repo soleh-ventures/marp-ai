@@ -15,9 +15,9 @@
 //     tells them (with a one-tap revert). Health red flags set safety_hold and
 //     are proposed, never auto-applied.
 
-import { and, desc, eq, gte } from "drizzle-orm";
+import { and, desc, eq, gte, isNull } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { activities, athletes } from "../db/schema.js";
+import { activities, athletes, weeklyEvaluations } from "../db/schema.js";
 import { getAthleticHistory } from "../flows/onboarding.js";
 import { getWeeklyEvaluationPrompt } from "../router/prompts.js";
 import { config } from "../config.js";
@@ -28,16 +28,19 @@ import {
   renderAdherenceLine,
   type AdherenceActivity,
 } from "./plan/adherence.js";
-import { getStoredPlan } from "./plan/storage.js";
+import { adjustPlan } from "./plan/adjust.js";
+import { getStoredPlan, saveAthletePlan } from "./plan/storage.js";
 import { renderPlanForContext, type Plan } from "./plan/types.js";
 import { resolveGoalLine } from "../memory/retrieve.js";
 import {
   computeWeekSignals,
+  computeWeekStart,
   loadWeekRows,
   openFlags,
   summarizeFeeling,
 } from "./run-retro.js";
 import { nowInZone } from "./reminders/timezone.js";
+import { sendWhatsApp } from "./twilio-send.js";
 
 export type WeeklyEvaluationDecision = {
   adjust: boolean;
@@ -195,4 +198,167 @@ const WEEK_REVIEW_Q =
 
 export function looksLikeWeekReviewRequest(body: string): boolean {
   return WEEK_REVIEW_Q.test(body);
+}
+
+// ─── Proactive end-of-week path (gated, launch-bound like M1's retro) ───────
+
+export type WeeklyEvalRunResult =
+  | { ran: false; reason: "already_done" | "no_plan" | "llm_failed" }
+  | { ran: true; status: string; adjusted: boolean; sent: boolean };
+
+// Run the evaluation for one athlete + week, idempotently. Builds the coach
+// read, and — per the user's decision — if the coach decides next week should
+// change AND it's not a health red flag, APPLIES the change and tells them
+// (with a one-tap revert). Health red flags (safety_hold) are proposed, never
+// auto-applied. Persists one weekly_evaluations row (the idempotency + revert
+// ledger). Sends only when proactive outbound is enabled.
+export async function runWeeklyEvaluationForAthlete(input: {
+  athleteId: string;
+  weekStart: string;
+  messageId?: string;
+}): Promise<WeeklyEvalRunResult> {
+  const { athleteId, weekStart } = input;
+
+  // Idempotency: one evaluation per athlete-week (collapses the Sunday ticks).
+  const [existing] = await db
+    .select({ id: weeklyEvaluations.id })
+    .from(weeklyEvaluations)
+    .where(
+      and(eq(weeklyEvaluations.athleteId, athleteId), eq(weeklyEvaluations.weekStart, weekStart)),
+    )
+    .limit(1);
+  if (existing) return { ran: false, reason: "already_done" };
+
+  const ev = await buildWeeklyEvaluation(athleteId, { messageId: input.messageId });
+  if (!ev) return { ran: false, reason: "no_plan" };
+
+  const d = ev.decision;
+  let message = ev.message;
+  let status = "evaluated";
+  let beforePlan: Plan | null = null;
+  let afterPlan: Plan | null = null;
+
+  if (d.adjust && d.safetyHold) {
+    // Health red flag — never auto-change load. Surface + propose.
+    status = "proposed";
+    if (d.changeSummary) {
+      message += `\n\nI'd usually adjust next week (${d.changeSummary}), but this looks health-related — let's not change your training around it blind. Reply "yes, adjust" if you want me to, and please get it checked.`;
+    }
+  } else if (d.adjust && d.editRequest) {
+    // Coach decides + applies. Snapshot first so "keep it" can revert.
+    const [row] = await db
+      .select({ athleticHistory: athletes.athleticHistory })
+      .from(athletes)
+      .where(eq(athletes.id, athleteId))
+      .limit(1);
+    beforePlan = row ? getStoredPlan(getAthleticHistory(row.athleticHistory)) : null;
+    const res = await adjustPlan({ athleteId, messageId: input.messageId ?? "", editRequest: d.editRequest });
+    if (res.ok && beforePlan) {
+      await saveAthletePlan(athleteId, res.plan);
+      afterPlan = res.plan;
+      status = "applied";
+      message += `\n\nI've adjusted next week — ${d.changeSummary}. ${d.rationale} Reply "keep it as it was" if you'd rather I didn't.`;
+    }
+    // If the edit couldn't be applied, fall back to the evaluation alone.
+  }
+
+  await db.insert(weeklyEvaluations).values({
+    athleteId,
+    weekStart,
+    weekIndex: ev.weekIndex,
+    evaluation: ev.message,
+    adjusted: status === "applied",
+    safetyHold: d.safetyHold,
+    changeSummary: d.changeSummary || null,
+    rationale: d.rationale || null,
+    beforePlan,
+    afterPlan,
+    status,
+  });
+
+  // Send only when the prod number is live (gated, like M1's retro). The row
+  // is recorded regardless so the loop is built + testable pre-launch.
+  let sent = false;
+  if (config.proactive.outboundEnabled) {
+    const [a] = await db
+      .select({ phone: athletes.phone })
+      .from(athletes)
+      .where(eq(athletes.id, athleteId))
+      .limit(1);
+    if (a?.phone) {
+      await sendWhatsApp(a.phone, message);
+      await db
+        .update(weeklyEvaluations)
+        .set({ sentAt: new Date() })
+        .where(and(eq(weeklyEvaluations.athleteId, athleteId), eq(weeklyEvaluations.weekStart, weekStart)));
+      sent = true;
+    }
+  }
+
+  return { ran: true, status, adjusted: status === "applied", sent };
+}
+
+export type WeeklyEvalSweepStats = { considered: number; eligible: number; ran: number };
+
+// End-of-week sweep on the in-process tick. Evaluates each athlete on their
+// local Sunday; idempotent per athlete-week.
+export async function runWeeklyEvaluationSweep(opts: { now: Date }): Promise<WeeklyEvalSweepStats> {
+  const stats: WeeklyEvalSweepStats = { considered: 0, eligible: 0, ran: 0 };
+  const candidates = await db
+    .select({ id: athletes.id, phone: athletes.phone, timezone: athletes.timezone })
+    .from(athletes)
+    .where(isNull(athletes.archivedAt));
+
+  for (const c of candidates) {
+    stats.considered++;
+    if (!c.timezone) continue;
+    const zoned = nowInZone(c.timezone, c.phone, opts.now);
+    if (zoned.weekday !== "sunday") continue;
+    stats.eligible++;
+    const weekStart = computeWeekStart(zoned.date, zoned.weekday);
+    try {
+      const r = await runWeeklyEvaluationForAthlete({ athleteId: c.id, weekStart });
+      if (r.ran) stats.ran++;
+    } catch (err) {
+      console.error(`weekly evaluation failed for athlete ${c.id}: ${(err as Error).message}`);
+    }
+  }
+  return stats;
+}
+
+// ─── Revert ("keep it as it was") ───────────────────────────────────────────
+
+const REVERT_Q =
+  /\b(keep it( as it was| the same| how it was)?|leave it (as is|alone|the same)|don'?t change (it|my plan)|revert( that| it)?|undo( that| it| the change)?|put it back|change it back)\b/i;
+
+export function looksLikeRevertRequest(body: string): boolean {
+  return REVERT_Q.test(body);
+}
+
+// Restore the plan to the snapshot taken before the most recent coach-applied
+// weekly adjustment (within 14 days). Returns a confirmation message, or null
+// when there's nothing recent to revert (caller falls through to routing).
+export async function revertLastWeeklyAdjustment(athleteId: string): Promise<string | null> {
+  const since = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+  const [row] = await db
+    .select({ id: weeklyEvaluations.id, beforePlan: weeklyEvaluations.beforePlan, changeSummary: weeklyEvaluations.changeSummary })
+    .from(weeklyEvaluations)
+    .where(
+      and(
+        eq(weeklyEvaluations.athleteId, athleteId),
+        eq(weeklyEvaluations.status, "applied"),
+        gte(weeklyEvaluations.createdAt, since),
+      ),
+    )
+    .orderBy(desc(weeklyEvaluations.createdAt))
+    .limit(1);
+  if (!row || !row.beforePlan) return null;
+
+  await saveAthletePlan(athleteId, row.beforePlan as Plan);
+  await db
+    .update(weeklyEvaluations)
+    .set({ status: "reverted" })
+    .where(eq(weeklyEvaluations.id, row.id));
+  const what = row.changeSummary ? ` (${row.changeSummary})` : "";
+  return `Done — I've put your plan back the way it was${what}. Tell me any time if you want to revisit it.`;
 }

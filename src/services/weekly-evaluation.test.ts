@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  looksLikeRevertRequest,
   looksLikeWeekReviewRequest,
   parseEvaluation,
 } from "./weekly-evaluation.js";
@@ -71,5 +72,31 @@ describe("looksLikeWeekReviewRequest", () => {
   ];
   for (const m of no) {
     test(`stays quiet on: "${m}"`, () => expect(looksLikeWeekReviewRequest(m)).toBe(false));
+  }
+});
+
+describe("looksLikeRevertRequest", () => {
+  const yes = [
+    "keep it as it was",
+    "keep it the same",
+    "leave it as is",
+    "don't change my plan",
+    "revert that",
+    "undo the change",
+    "put it back",
+    "change it back",
+  ];
+  for (const m of yes) {
+    test(`fires on: "${m}"`, () => expect(looksLikeRevertRequest(m)).toBe(true));
+  }
+
+  const no = [
+    "what's my plan",
+    "can you change my long run to Sunday",
+    "how did my week go",
+    "thanks coach",
+  ];
+  for (const m of no) {
+    test(`stays quiet on: "${m}"`, () => expect(looksLikeRevertRequest(m)).toBe(false));
   }
 });
