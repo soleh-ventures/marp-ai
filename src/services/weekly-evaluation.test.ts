@@ -78,23 +78,25 @@ describe("looksLikeWeekReviewRequest", () => {
 describe("looksLikeRevertRequest", () => {
   const yes = [
     "keep it as it was",
-    "keep it the same",
-    "leave it as is",
-    "don't change my plan",
+    "keep it the way it was",
     "revert that",
     "undo the change",
     "put it back",
     "change it back",
+    "don't apply that",
   ];
   for (const m of yes) {
     test(`fires on: "${m}"`, () => expect(looksLikeRevertRequest(m)).toBe(true));
   }
 
+  // Deliberately NOT a revert (would collide with ordinary plan-edit talk):
   const no = [
     "what's my plan",
     "can you change my long run to Sunday",
     "how did my week go",
     "thanks coach",
+    "don't change my plan, keep Tuesday as the long run", // a plan-edit request
+    "keep it the same intensity but move it earlier",
   ];
   for (const m of no) {
     test(`stays quiet on: "${m}"`, () => expect(looksLikeRevertRequest(m)).toBe(false));

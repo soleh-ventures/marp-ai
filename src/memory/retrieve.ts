@@ -455,6 +455,7 @@ export function formatContext(input: FormatInput): string {
         wk,
         input.activities,
         input.zonedToday.date,
+        input.zonedToday.timezone,
       );
       const adherence = renderAdherenceLine(wa);
       if (adherence) parts.push(adherence);

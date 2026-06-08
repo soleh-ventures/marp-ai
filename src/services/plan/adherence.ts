@@ -71,8 +71,19 @@ const DOW_ORDER: DayOfWeek[] = [
   "sunday",
 ];
 
-function utcDay(d: Date): string {
-  return d.toISOString().slice(0, 10);
+// The activity's calendar day in the athlete's timezone (YYYY-MM-DD).
+// Prescribed session dates are athlete-local, so activities must be bucketed
+// in the same frame — bucketing by UTC mis-files a run done in the early or
+// late local hours onto the wrong day (review: HIGH). Falls back to UTC when
+// no timezone is known.
+function localDay(d: Date, tz: string | null | undefined): string {
+  if (!tz) return d.toISOString().slice(0, 10);
+  try {
+    // en-CA formats as YYYY-MM-DD.
+    return new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(d);
+  } catch {
+    return d.toISOString().slice(0, 10);
+  }
 }
 
 function distanceKm(metrics: unknown): number | null {
@@ -115,14 +126,16 @@ export function computeWeekAdherence(
   weekIndex: number,
   activities: AdherenceActivity[],
   todayISO: string,
+  timezone?: string | null,
 ): WeekAdherence {
   const week = plan.weeks.find((w) => w.index === weekIndex);
   const start = sessionDate(plan.start_date, weekIndex, "monday");
   const end = sessionDate(plan.start_date, weekIndex, "sunday");
 
-  // Activities that fall inside this week, by UTC calendar day.
+  // Activities that fall inside this week, by the athlete's LOCAL calendar day
+  // (same frame as the prescribed session dates).
   const inWeek = activities
-    .map((a) => ({ a, day: utcDay(a.startedAt) }))
+    .map((a) => ({ a, day: localDay(a.startedAt, timezone) }))
     .filter(({ day }) => day >= start && day <= end);
   const claimed = new Set<number>(); // indices of inWeek consumed by a session
 

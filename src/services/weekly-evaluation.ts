@@ -126,11 +126,12 @@ export async function buildWeeklyEvaluation(
   const plan: Plan | null = getStoredPlan(history);
   if (!plan) return null; // nothing to evaluate
 
-  const today = nowInZone(a.timezone, a.phone).date;
+  const zoned = nowInZone(a.timezone, a.phone);
+  const today = zoned.date;
   const weekIndex = opts.weekIndex ?? currentWeekIndex(plan, today);
 
   const acts = await loadActivities(athleteId);
-  const adherence = computeWeekAdherence(plan, weekIndex, acts, today);
+  const adherence = computeWeekAdherence(plan, weekIndex, acts, today, zoned.timezone);
   const adherenceLine = renderAdherenceLine(adherence) ?? "No prescribed sessions were due this week.";
 
   const rows = await loadWeekRows(athleteId);
@@ -237,6 +238,9 @@ export async function runWeeklyEvaluationForAthlete(input: {
   let status = "evaluated";
   let beforePlan: Plan | null = null;
   let afterPlan: Plan | null = null;
+  // The athlete history to write back when applying (captured before the
+  // mutation so the plan update + ledger insert can land in one transaction).
+  let applyHistory: Record<string, unknown> | null = null;
 
   if (d.adjust && d.safetyHold) {
     // Health red flag — never auto-change load. Surface + propose.
@@ -245,24 +249,29 @@ export async function runWeeklyEvaluationForAthlete(input: {
       message += `\n\nI'd usually adjust next week (${d.changeSummary}), but this looks health-related — let's not change your training around it blind. Reply "yes, adjust" if you want me to, and please get it checked.`;
     }
   } else if (d.adjust && d.editRequest) {
-    // Coach decides + applies. Snapshot first so "keep it" can revert.
+    // Coach decides + applies. Load history once; snapshot the current plan so
+    // "keep it" can revert. Bail before the LLM call if there's no plan to edit
+    // (don't burn a Sonnet call we'd discard — review).
     const [row] = await db
       .select({ athleticHistory: athletes.athleticHistory })
       .from(athletes)
       .where(eq(athletes.id, athleteId))
       .limit(1);
-    beforePlan = row ? getStoredPlan(getAthleticHistory(row.athleticHistory)) : null;
-    const res = await adjustPlan({ athleteId, messageId: input.messageId ?? "", editRequest: d.editRequest });
-    if (res.ok && beforePlan) {
-      await saveAthletePlan(athleteId, res.plan);
-      afterPlan = res.plan;
-      status = "applied";
-      message += `\n\nI've adjusted next week — ${d.changeSummary}. ${d.rationale} Reply "keep it as it was" if you'd rather I didn't.`;
+    const hist = getAthleticHistory(row?.athleticHistory);
+    beforePlan = getStoredPlan(hist);
+    if (beforePlan) {
+      const res = await adjustPlan({ athleteId, messageId: input.messageId ?? "", editRequest: d.editRequest });
+      if (res.ok) {
+        afterPlan = res.plan;
+        applyHistory = { ...hist, plan: res.plan };
+        status = "applied";
+        message += `\n\nI've adjusted next week — ${d.changeSummary}. ${d.rationale} Reply "keep it as it was" if you'd rather I didn't.`;
+      }
+      // If the edit couldn't be applied, fall back to the evaluation alone.
     }
-    // If the edit couldn't be applied, fall back to the evaluation alone.
   }
 
-  await db.insert(weeklyEvaluations).values({
+  const ledgerValues = {
     athleteId,
     weekStart,
     weekIndex: ev.weekIndex,
@@ -274,7 +283,22 @@ export async function runWeeklyEvaluationForAthlete(input: {
     beforePlan,
     afterPlan,
     status,
-  });
+  };
+
+  if (status === "applied" && applyHistory) {
+    // Atomic: the plan mutation and the ledger row land together, so a crash
+    // can't leave a changed plan with no revert/idempotency record (review).
+    // A unique-index conflict here throws and rolls back the plan update — the
+    // safe outcome under the (single-process) idempotency guard.
+    await db.transaction(async (tx) => {
+      await tx.update(athletes).set({ athleticHistory: applyHistory }).where(eq(athletes.id, athleteId));
+      await tx.insert(weeklyEvaluations).values(ledgerValues);
+    });
+  } else {
+    // No mutation — the ledger insert is the only write. onConflictDoNothing
+    // makes the once-per-week guarantee hold even if two ticks ever overlap.
+    await db.insert(weeklyEvaluations).values(ledgerValues).onConflictDoNothing();
+  }
 
   // Send only when the prod number is live (gated, like M1's retro). The row
   // is recorded regardless so the loop is built + testable pre-launch.
@@ -328,8 +352,13 @@ export async function runWeeklyEvaluationSweep(opts: { now: Date }): Promise<Wee
 
 // ─── Revert ("keep it as it was") ───────────────────────────────────────────
 
+// Deliberately narrow: this triggers a destructive plan overwrite (restore a
+// snapshot), so it only matches explicit "undo the change" phrasings — NOT
+// loose ones like "don't change my plan" or "keep it the same" that collide
+// with ordinary plan-edit conversation (review). The announced phrase is
+// "keep it as it was".
 const REVERT_Q =
-  /\b(keep it( as it was| the same| how it was)?|leave it (as is|alone|the same)|don'?t change (it|my plan)|revert( that| it)?|undo( that| it| the change)?|put it back|change it back)\b/i;
+  /\b(keep it (as it was|the way it was|like it was)|revert( that| it| the change| the adjustment)?|undo( that| it| the change| the adjustment)?|put it back( the way it was)?|change it back|don'?t apply that)\b/i;
 
 export function looksLikeRevertRequest(body: string): boolean {
   return REVERT_Q.test(body);
@@ -354,7 +383,12 @@ export async function revertLastWeeklyAdjustment(athleteId: string): Promise<str
     .limit(1);
   if (!row || !row.beforePlan) return null;
 
-  await saveAthletePlan(athleteId, row.beforePlan as Plan);
+  // Validate the snapshot before restoring — never write an unvalidated blob
+  // back as the live plan (review). getStoredPlan checks version + weeks.
+  const snapshot = getStoredPlan({ plan: row.beforePlan } as ReturnType<typeof getAthleticHistory>);
+  if (!snapshot) return null;
+
+  await saveAthletePlan(athleteId, snapshot);
   await db
     .update(weeklyEvaluations)
     .set({ status: "reverted" })

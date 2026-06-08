@@ -88,6 +88,25 @@ describe("computeWeekAdherence", () => {
     expect(wa.extras[0]?.km).toBe(6);
   });
 
+  test("buckets activities by the athlete's local day, not UTC", () => {
+    // A run at 22:30 UTC Saturday is 00:30 Sunday in Berlin (+2). It should
+    // satisfy the SUNDAY session, not be a Saturday miss + extra.
+    const sundayLong: PlanSession = { day_of_week: "sunday", type: "long", distance_km: 10, description: "Long 10k" };
+    const act: AdherenceActivity = {
+      discipline: "run",
+      startedAt: new Date("2026-06-06T22:30:00Z"), // Sat 22:30 UTC = Sun 00:30 Berlin
+      durationS: 60 * 60,
+      metrics: { distance_m: 10000 },
+    };
+    const withTz = computeWeekAdherence(plan([sundayLong]), 1, [act], "2026-06-07", "Europe/Berlin");
+    expect(withTz.sessions.find((s) => s.prescribed.type === "long")?.status).toBe("done");
+    expect(withTz.extras).toHaveLength(0);
+
+    // Without a timezone it falls back to UTC and mis-files it as Saturday.
+    const noTz = computeWeekAdherence(plan([sundayLong]), 1, [act], "2026-06-07");
+    expect(noTz.sessions.find((s) => s.prescribed.type === "long")?.status).toBe("missed");
+  });
+
   test("one activity can't satisfy two sessions (no double-count)", () => {
     // Two prescribed runs same day; one actual run → one done, one missed.
     const twoSameDay: PlanSession[] = [
