@@ -64,6 +64,9 @@ export type StravaActivity = {
   average_cadence?: number;
   calories?: number;
   has_heartrate?: boolean;
+  // The detailed activity GET includes the runner's free-text description /
+  // notes ("legs felt heavy, eased off the last 2k"). Rich coaching signal.
+  description?: string;
 };
 
 export type NormalizedActivity = {
@@ -100,6 +103,8 @@ export function normalizeStravaActivity(a: StravaActivity): NormalizedActivity {
     avg_cadence: a.average_cadence ?? null,
     calories: a.calories ?? null,
     name: a.name ?? null,
+    // KER-80: the runner's own notes on the activity, when they wrote any.
+    description: a.description && a.description.trim() ? a.description.trim() : null,
   };
 
   return {

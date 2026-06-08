@@ -30,6 +30,7 @@ import {
 } from "./plan/adherence.js";
 import { adjustPlan } from "./plan/adjust.js";
 import { getStoredPlan, saveAthletePlan } from "./plan/storage.js";
+import { loadStreamSummaries, renderStreamAnnotation } from "./strava-streams.js";
 import { renderPlanForContext, type Plan } from "./plan/types.js";
 import { resolveGoalLine } from "../memory/retrieve.js";
 import {
@@ -89,11 +90,14 @@ export function parseEvaluation(raw: string): WeeklyEvaluation["decision"] & {
   };
 }
 
-async function loadActivities(athleteId: string): Promise<AdherenceActivity[]> {
+type WeekActivity = AdherenceActivity & { id: string };
+
+async function loadActivities(athleteId: string): Promise<WeekActivity[]> {
   // 21 days covers the week being evaluated with margin.
   const since = new Date(Date.now() - 21 * 24 * 60 * 60 * 1000);
   return db
     .select({
+      id: activities.id,
       discipline: activities.discipline,
       startedAt: activities.startedAt,
       durationS: activities.durationS,
@@ -141,6 +145,20 @@ export async function buildWeeklyEvaluation(
 
   const goalLine = resolveGoalLine(undefined, a.athleticHistory) ?? "Goal: not on file.";
 
+  // KER-80 (Phase 3): stream shapes for this week's activities (split pattern,
+  // HR drift) so the evaluation can cite progression, not just averages.
+  const inWeek = acts.filter(
+    (x) => x.startedAt.toISOString().slice(0, 10) >= adherence.start && x.startedAt.toISOString().slice(0, 10) <= adherence.end,
+  );
+  const streamMap = await loadStreamSummaries(inWeek.map((x) => x.id));
+  const streamLines = inWeek
+    .map((x) => {
+      const s = streamMap.get(x.id);
+      const note = s ? renderStreamAnnotation(s) : "";
+      return note ? `${x.startedAt.toISOString().slice(0, 10)} ${x.discipline}: ${note}` : null;
+    })
+    .filter((v): v is string => v !== null);
+
   const payload = [
     `Today: ${today}. Evaluating week ${weekIndex} of ${plan.weeks.length}.`,
     goalLine,
@@ -152,6 +170,7 @@ export async function buildWeeklyEvaluation(
     "PHYSIOLOGICAL SIGNALS this week:",
     JSON.stringify(signals),
     perRun.length ? `Per-run feel: ${perRun.join(" | ")}` : "Per-run feel: (none logged)",
+    streamLines.length ? `Stream shapes: ${streamLines.join(" | ")}` : "Stream shapes: (none)",
     flags.length ? `Open flags: ${flags.map((f) => `${f.kind}: ${f.body}`).join("; ")}` : "Open flags: none",
     "",
     "CURRENT PLAN (for context on what next week looks like):",

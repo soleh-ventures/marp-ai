@@ -13,6 +13,7 @@
     "db:seed": "bun run src/db/seed.ts",
     "db:studio": "drizzle-kit studio",
     "strava:bootstrap": "bun run src/scripts/bootstrap-strava-webhook.ts",
+    "streams:backfill": "bun run src/scripts/backfill-streams.ts",
     "admin:delete-athlete": "bun run src/scripts/admin-delete-athlete.ts",
     "admin:summarize-block": "bun run src/scripts/admin-summarize-block.ts",
     "admin:export-athlete": "bun run src/scripts/admin-export-athlete.ts",

@@ -323,9 +323,14 @@ export function formatActivityLine(a: ActivityRow): string {
   }
   if (hr !== null) details.push(`HR ${hr}`);
 
-  const base = details.length > 0 ? `  ${main} — ${details.join(", ")}` : `  ${main}`;
+  let base = details.length > 0 ? `  ${main} — ${details.join(", ")}` : `  ${main}`;
   // KER-80: append the streams shape when we have it.
-  return a.streamNote ? `${base} [${a.streamNote}]` : base;
+  if (a.streamNote) base += ` [${a.streamNote}]`;
+  // KER-80: the runner's own note on the activity (Strava description) is a
+  // strong coaching signal — surface it, trimmed.
+  const desc = typeof m.description === "string" ? m.description.trim() : "";
+  if (desc) base += ` — note: "${desc.length > 140 ? `${desc.slice(0, 140)}…` : desc}"`;
+  return base;
 }
 
 // KER-78 (1b): the resolved-goal ground-truth line. Precedence (D1):

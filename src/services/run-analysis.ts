@@ -27,6 +27,7 @@ import { llmCall } from "./llm-call.js";
 import { getStoredPlan } from "./plan/storage.js";
 import { sessionDate, type Plan } from "./plan/types.js";
 import { sendPostRunCheckIn } from "./check-in.js";
+import { loadStreamSummaries, renderStreamAnnotation } from "./strava-streams.js";
 
 export type PerKm = { km: number; pace_s_per_km: number; hr: number | null };
 
@@ -170,6 +171,15 @@ export async function analyzeActivity(input: {
 
   const objective = computeObjectiveRead(act.rawPayload, act.metrics);
 
+  // KER-80 (Phase 3): the streams summary adds split pattern + HR drift the
+  // raw_payload splits don't carry. Captured at ingest, so it's available by
+  // the time the post-run pipeline runs.
+  const streamMap = await loadStreamSummaries([input.activityId]);
+  const streamSummary = streamMap.get(input.activityId) ?? null;
+  const streamLine = streamSummary
+    ? `# Stream detail (per-km splits, split pattern, HR drift)\n${renderStreamAnnotation(streamSummary)}\n\n`
+    : "";
+
   // Planned-session context (best effort).
   let plannedLine = "Planned session today: (unknown / unscheduled)";
   const [ath] = await db
@@ -187,6 +197,7 @@ export async function analyzeActivity(input: {
   try {
     const user =
       `# Objective stats (pre-computed — do not recompute)\n${JSON.stringify(objective)}\n\n` +
+      streamLine +
       `# Discipline\nrun${act.longRun ? " (long run)" : ""}\n\n` +
       `# ${plannedLine}\n\n` +
       `# Task\nWrite the coach's read of this run (1-2 sentences, plain text, no question).`;
