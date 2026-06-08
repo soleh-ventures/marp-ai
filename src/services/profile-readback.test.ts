@@ -43,6 +43,17 @@ describe("profileQuestionKind", () => {
     "what's my pace target for tomorrow's intervals", // coaching, not profile
     "where should I run this weekend",
     "my goal this week is to not skip a session", // aspirational chatter
+    // Review H2: coaching questions that merely contain "goal" must fall
+    // through to the router, not get a static goal readback.
+    "what's my goal pace for tomorrow",
+    "what's my goal for this build phase",
+    "what's my race plan look like",
+    // Review H2: edit/write intents must reach the router so the change
+    // actually happens — never a read-only dump.
+    "update my profile",
+    "fix my details, the city is wrong",
+    "change my goal time to 4:00",
+    "can you update my home city",
   ];
   for (const m of notProfile) {
     test(`not a profile question: "${m}"`, () =>

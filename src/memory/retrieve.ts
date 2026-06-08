@@ -327,11 +327,17 @@ export function resolveGoalLine(
     const name = typeof t.name === "string" ? t.name : null;
     const dist = typeof t.distance === "string" ? t.distance : null;
     const goalTime = typeof t.goal_time === "string" ? t.goal_time : null;
+    // C1 (review): the race DATE must stay in context — the plan generator
+    // sizes the block and places the taper from it. We stripped target_race
+    // from the JSON dump, so surface the date here or first-plan generation
+    // (no active block yet) loses it.
+    const date = typeof t.date === "string" ? t.date : null;
     const what = [dist, name && `(${name})`].filter(Boolean).join(" ") || "their race";
+    const on = date ? ` on ${date}` : "";
     if (goalTime) {
-      return `${PREFIX}${goalTime} for ${what} — stated goal, no active race plan yet.${GUARD}`;
+      return `${PREFIX}${goalTime} for ${what}${on} — stated goal, no active race plan yet.${GUARD}`;
     }
-    return `${PREFIX}finish ${what} — stated goal, no target time set; do NOT invent one.`;
+    return `${PREFIX}finish ${what}${on} — stated goal, no target time set; do NOT invent one.`;
   }
 
   // No goal anywhere — say so rather than let the model fill the vacuum.

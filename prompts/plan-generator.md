@@ -49,7 +49,7 @@ Return exactly one JSON object with this shape:
 4. **Quality sessions.** One tempo + one intervals per week during build/peak. Tempo at lactate threshold (HR ~85% max or marathon pace +5-10s/km). Intervals at VO2max (3-5min reps at 5K pace).
 
    **Personalise the paces.** Anchor every pace to the runner's actual fitness, not generic descriptions:
-   - If `target_race.goal_time` is given, derive goal race pace from it and set tempo/interval/easy paces relative to that (Daniels VDOT). Put concrete per-km (or per-mile, matching their locale) paces in the session `description`.
+   - If a goal time is given (see the "Goal (ground truth)" line in the runner context, and the race date there too), derive goal race pace from it and set tempo/interval/easy paces relative to that (Daniels VDOT). Put concrete per-km (or per-mile, matching their locale) paces in the session `description`.
    - Otherwise, derive VDOT from their most recent `recent_race_times`, and if none exist, from current easy-run pace / weekly volume. State the assumption in week 1's `focus`.
    - Never ship vague "run at a comfortable pace" when you have the data to give a number.
 

@@ -10,19 +10,26 @@
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { athletes, raceBlocks } from "../db/schema.js";
-import { getAthleticHistory } from "../flows/onboarding.js";
 
 const LOCATION_Q =
   /\b(where do i live|where am i (based|living)|what(?:'?s| is) my (home|city|location)|which city do i live)\b/i;
+// "what's my goal / target time / race goal" — but NOT coaching questions
+// like "what's my goal PACE" or "what's my goal FOR this build" (review H2).
 const GOAL_Q =
-  /\b(what(?:'?s| is) my (goal|target|target time|goal time|race goal)|what am i (training|aiming|going) for|what(?:'?s| is) my race)\b/i;
+  /\b(what(?:'?s| is) my (goal|target time|race goal)(?!\s+(pace|for|this|next|today|tomorrow|the))|what(?:'?s| is) my target time|what time am i (aiming|going|shooting) for|what am i training for)\b/i;
 const PROFILE_Q =
-  /\b(what do you know about me|what(?:'?s| is) (on file|in my profile|my profile)|my (profile|details|info)( on file)?|what have you got on me)\b/i;
+  /\b(what do you know about me|what(?:'?s| is) (on file|in my profile|my profile)|my (profile|details|info) on file|what have you got on me)\b/i;
+// Edit/write intents must NOT be answered with a read-only dump — they go to
+// the router so the change actually happens (review H2). "update my profile",
+// "fix my details", "change my goal", "also update my plan", etc.
+const EDIT_INTENT = /\b(update|edit|fix|correct|wrong|reset|delete|remove|add)\b/i;
 
 export type ProfileQuestionKind = "location" | "goal" | "profile";
 
 // Cheap pure pre-check. Returns the kind of profile question, or null.
+// Returns null on any edit/write intent so the router handles the change.
 export function profileQuestionKind(body: string): ProfileQuestionKind | null {
+  if (EDIT_INTENT.test(body)) return null;
   if (PROFILE_Q.test(body)) return "profile";
   if (LOCATION_Q.test(body)) return "location";
   if (GOAL_Q.test(body)) return "goal";
@@ -94,7 +101,6 @@ export async function buildProfileReadback(
     return `Your goal on file: ${goalText(block, a.athleticHistory)}.`;
   }
   // profile: the facts I actually hold, verbatim.
-  getAthleticHistory(a.athleticHistory); // (no-op guard kept for shape parity)
   const lines = [
     `Here's what I've got on file:`,
     `• Name: ${a.name ?? "not on file"}`,

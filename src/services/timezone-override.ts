@@ -40,7 +40,7 @@ Return ONLY JSON: {"timezone": "<IANA name>", "city": "<City>", "kind": "move"|"
 Rules:
 - Use a canonical IANA name like "America/New_York", "Asia/Tokyo", "Europe/Berlin", "Australia/Sydney".
 - "city" is the human city/place name as the runner would say it (e.g. "Berlin", "New York", "Bali"). Map it to the right IANA zone (NYC/New York -> America/New_York, London -> Europe/London, Bali -> Asia/Makassar).
-- "kind": "move" when they are relocating / now live there ("I moved to X", "I now live in X", "relocated to X", "I'm based in X"). "trip" when they are only there temporarily ("I'm in X this week", "visiting X", "travelling to X", "here in X for a race").
+- "kind": "move" ONLY when they are clearly relocating permanently ("I moved to X", "I now live in X", "I've relocated to X", "I permanently moved to X"). "trip" for anything temporary or ambiguous — "I'm in X this week", "visiting X", "travelling to X", "here in X for a race", and also "I'm based in X" / "currently in X" when there's any hint it's for an event or a stay. When unsure between move and trip, choose "trip" (it preserves their home; only an unambiguous relocation should overwrite it).
 - If the message names no real place (e.g. "I'm in pain", "I'm in the zone", "I'm in a rush"), return {"timezone": null}.
 - Never invent a zone you are unsure of. When unsure, return {"timezone": null}.
 - Output JSON only, no prose, no markdown.`;
