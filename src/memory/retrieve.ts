@@ -16,6 +16,10 @@ import {
   currentWeekIndex,
   renderAdherenceLine,
 } from "../services/plan/adherence.js";
+import {
+  loadStreamSummaries,
+  renderStreamAnnotation,
+} from "../services/strava-streams.js";
 import { nowInZone, type ZonedNow } from "../services/reminders/timezone.js";
 
 // How many recent inbound + outbound messages to surface to the LLM as
@@ -171,8 +175,9 @@ export async function getMemoryContext(
 
   // Recent activities. Newest first — the LLM wants to know what the
   // runner *just* did to ground "how did that go" / "what's next" replies.
-  const activityRows = await db
+  const activityRowsRaw = await db
     .select({
+      id: activities.id,
       discipline: activities.discipline,
       startedAt: activities.startedAt,
       durationS: activities.durationS,
@@ -183,6 +188,16 @@ export async function getMemoryContext(
     .where(eq(activities.athleteId, athleteId))
     .orderBy(desc(activities.startedAt))
     .limit(RECENT_ACTIVITY_LIMIT);
+
+  // KER-80 (Phase 3): attach the Strava streams annotation (split pattern,
+  // HR drift, km range) to each activity that has one, so the coaching LLM
+  // can cite the real shape of the run, not just the average.
+  const streamMap = await loadStreamSummaries(activityRowsRaw.map((r) => r.id));
+  const activityRows: ActivityRow[] = activityRowsRaw.map((r) => {
+    const s = streamMap.get(r.id);
+    const note = s ? renderStreamAnnotation(s) : "";
+    return { ...r, streamNote: note || null };
+  });
 
   // F8 follow-up: anchor every conversational reply to the runner's real
   // local date + weekday. Without this the coaching LLMs (domain + synth)
@@ -224,6 +239,9 @@ export type ActivityRow = {
   durationS: number;
   metrics: unknown;
   longRun: boolean;
+  // KER-80: pre-rendered streams annotation (split pattern / HR drift / km
+  // range), or null when no streams summary exists for this activity.
+  streamNote?: string | null;
 };
 
 type FormatInput = {
@@ -305,7 +323,9 @@ export function formatActivityLine(a: ActivityRow): string {
   }
   if (hr !== null) details.push(`HR ${hr}`);
 
-  return details.length > 0 ? `  ${main} — ${details.join(", ")}` : `  ${main}`;
+  const base = details.length > 0 ? `  ${main} — ${details.join(", ")}` : `  ${main}`;
+  // KER-80: append the streams shape when we have it.
+  return a.streamNote ? `${base} [${a.streamNote}]` : base;
 }
 
 // KER-78 (1b): the resolved-goal ground-truth line. Precedence (D1):

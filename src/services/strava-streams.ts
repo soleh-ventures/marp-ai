@@ -8,7 +8,7 @@
 // arrays to the LLM (a 90-min run is ~5k samples × N channels); only the
 // summary reaches the coaching context + the post-run read.
 
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { activityStreams } from "../db/schema.js";
 
@@ -162,6 +162,41 @@ export async function fetchActivityStreams(
   if (!json || typeof json !== "object") return { ok: false, reason: "no_streams" };
   const summary = summarizeStreams(json as StravaStreams);
   return { ok: true, summary };
+}
+
+// Load stored stream summaries for a set of activity ids → Map keyed by
+// activityId. Empty map when none. Used to surface splits/drift in the
+// coaching context and the weekly evaluation.
+export async function loadStreamSummaries(
+  activityIds: string[],
+): Promise<Map<string, StreamSummary>> {
+  const out = new Map<string, StreamSummary>();
+  if (activityIds.length === 0) return out;
+  const rows = await db
+    .select({ activityId: activityStreams.activityId, summary: activityStreams.summary })
+    .from(activityStreams)
+    .where(inArray(activityStreams.activityId, activityIds));
+  for (const r of rows) out.set(r.activityId, r.summary as StreamSummary);
+  return out;
+}
+
+// One-line coach-facing annotation of a stream summary: split pattern, HR
+// drift, and the fastest/slowest km. Compact enough to append to an activity
+// line in context. Returns "" when there's nothing worth saying.
+export function renderStreamAnnotation(s: StreamSummary): string {
+  const bits: string[] = [];
+  if (s.split_pattern !== "even") bits.push(`${s.split_pattern} split`);
+  if (s.hr_drift_pct !== null && Math.abs(s.hr_drift_pct) >= 3) {
+    bits.push(`HR drift ${s.hr_drift_pct > 0 ? "+" : ""}${s.hr_drift_pct}%`);
+  }
+  if (s.km_splits.length >= 2) {
+    const paces = s.km_splits.map((k) => k.pace_s_per_km);
+    const fast = Math.min(...paces);
+    const slow = Math.max(...paces);
+    const fmt = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, "0")}`;
+    bits.push(`km ${fmt(fast)}–${fmt(slow)}`);
+  }
+  return bits.join(", ");
 }
 
 // Persist a streams summary for an activity (idempotent per activity).

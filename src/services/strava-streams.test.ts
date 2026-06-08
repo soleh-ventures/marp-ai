@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   nearRateLimit,
+  renderStreamAnnotation,
   summarizeStreams,
   type StravaStreams,
+  type StreamSummary,
 } from "./strava-streams.js";
 
 // A 2km run sampled every 60s. km1 takes 300s, km2 takes 240s (sped up =
@@ -59,6 +61,35 @@ describe("summarizeStreams", () => {
   test("empty / malformed → null", () => {
     expect(summarizeStreams({})).toBeNull();
     expect(summarizeStreams({ time: { data: [] }, distance: { data: [] } })).toBeNull();
+  });
+});
+
+describe("renderStreamAnnotation", () => {
+  const base: StreamSummary = {
+    km_splits: [
+      { km: 1, pace_s_per_km: 300, avg_hr: 150 },
+      { km: 2, pace_s_per_km: 270, avg_hr: 160 },
+    ],
+    split_pattern: "negative",
+    hr_drift_pct: 6.5,
+    avg_hr: 155,
+    max_hr: 165,
+    total_distance_m: 2000,
+    total_time_s: 570,
+  };
+
+  test("names split pattern, HR drift, and km range", () => {
+    const out = renderStreamAnnotation(base);
+    expect(out).toContain("negative split");
+    expect(out).toContain("HR drift +6.5%");
+    expect(out).toContain("km 4:30–5:00");
+  });
+
+  test("omits even split and sub-threshold drift", () => {
+    const out = renderStreamAnnotation({ ...base, split_pattern: "even", hr_drift_pct: 1 });
+    expect(out).not.toContain("split");
+    expect(out).not.toContain("HR drift");
+    expect(out).toContain("km"); // still shows the range
   });
 });
 
