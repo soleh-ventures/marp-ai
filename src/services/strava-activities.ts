@@ -13,6 +13,7 @@ import {
   extractIanaFromStravaTz,
   inferTimezoneFromPhone,
 } from "./reminders/timezone.js";
+import { captureActivityStreams } from "./strava-streams.js";
 
 // Heuristic threshold for tagging an activity as a "long run". Doesn't
 // account for the runner's individual training base — that's done at a
@@ -63,6 +64,9 @@ export type StravaActivity = {
   average_cadence?: number;
   calories?: number;
   has_heartrate?: boolean;
+  // The detailed activity GET includes the runner's free-text description /
+  // notes ("legs felt heavy, eased off the last 2k"). Rich coaching signal.
+  description?: string;
 };
 
 export type NormalizedActivity = {
@@ -99,6 +103,8 @@ export function normalizeStravaActivity(a: StravaActivity): NormalizedActivity {
     avg_cadence: a.average_cadence ?? null,
     calories: a.calories ?? null,
     name: a.name ?? null,
+    // KER-80: the runner's own notes on the activity, when they wrote any.
+    description: a.description && a.description.trim() ? a.description.trim() : null,
   };
 
   return {
@@ -185,6 +191,27 @@ export async function ingestStravaActivity(
 
   const newId = insertedRows[0]?.id;
   if (!newId) return { inserted: false };
+
+  // KER-80 (Phase 3): capture the streams summary (per-km splits, HR drift,
+  // split pattern) for any DISTANCE-bearing activity — runs, rides, swims,
+  // walks, hikes — not just runs (bug #5: "include my other activities too").
+  // The summarizer is sport-agnostic; strength/mobility have no distance.
+  // FIRE-AND-FORGET: this is a 2nd Strava call, and a best-effort enrichment
+  // must not sit on the runner's post-run reply path (review). It runs
+  // concurrently with the post-run pipeline; captureActivityStreams never
+  // throws. A future backfill handles history.
+  if ((raw.distance ?? 0) > 0 && norm.discipline !== "other") {
+    void captureActivityStreams({
+      accessToken,
+      stravaActivityId: activityId,
+      activityRowId: newId,
+    }).then((outcome) => {
+      if (outcome !== "stored" && outcome !== "no_streams") {
+        console.log(`strava streams capture: ${outcome} for activity ${newId}`);
+      }
+    });
+  }
+
   return { inserted: true, athleteId: conn.athleteId, activityId: newId };
 }
 
