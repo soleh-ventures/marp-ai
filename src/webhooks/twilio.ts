@@ -102,9 +102,9 @@ twilioWebhook.post("/whatsapp", async (c) => {
   // logged; the runner just doesn't see a reply, which is recoverable
   // (they'll re-engage, we'll see it in the log).
   //
-  // The "thinking…" ack now fires from process-incoming's LLM-bound
-  // branches (V1, v1.1 flow redesign) — immediate rather than 5s timer,
-  // and suppressed on fast paths (consent / dormancy / file-ingest /
+  // The native WhatsApp "typing…" indicator fires from process-incoming's
+  // LLM-bound branches (referencing this inbound SID) — immediate, and
+  // suppressed on fast paths (consent / dormancy / file-ingest /
   // Strava-connect / deletion) where the reply lands quickly.
   const task = processIncomingMessage(
     athlete.id,
@@ -112,6 +112,9 @@ twilioWebhook.post("/whatsapp", async (c) => {
     bodyText,
     mediaUrl,
     mediaContentType,
+    // Pass the inbound Twilio SID so the LLM-bound branches can show the
+    // native WhatsApp "typing…" indicator (referencing this message).
+    sid,
   )
     .catch((err) => {
       console.error("processIncoming failed:", err);

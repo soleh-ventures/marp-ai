@@ -14,7 +14,7 @@ import { alertOperator } from "./safety/alert.js";
 import { recordSafetyEvent } from "./safety/events.js";
 import { emergencyResponse, referralPrefixFor } from "./safety/responses.js";
 import { sendWhatsApp, TwilioSendError } from "./twilio-send.js";
-import { fireThinkingAck } from "./thinking-ack.js";
+import { fireTypingIndicator } from "./typing-indicator.js";
 import {
   PIVOT_QUESTION,
   PIVOT_REPLY_BYO,
@@ -119,6 +119,10 @@ export async function processIncomingMessage(
   // branch with the media silently ignored.
   mediaUrl?: string | null,
   mediaContentType?: string | null,
+  // The Twilio SID of this inbound message (SM…). Used to show the native
+  // WhatsApp "typing…" indicator while we work. Optional so non-Twilio-driven
+  // callers (tests, synthetic turns) skip the indicator instead of breaking.
+  inboundSid?: string | null,
 ): Promise<void> {
   // Pull phone + athletic_history in one query — we need both regardless
   // of which branch we take.
@@ -430,7 +434,7 @@ export async function processIncomingMessage(
     // itself; we just take the reply.
     // V1: fire "thinking…" immediately — onboarding LLM round-trip is
     // typically 2-4s, long enough for silence to feel ambiguous.
-    fireThinkingAck(athleteRow.phone);
+    fireTypingIndicator(inboundSid);
     const onboardingResult = await runOnboardingTurn(
       athleteId,
       messageId,
@@ -492,7 +496,7 @@ export async function processIncomingMessage(
       // still open. Answer THAT via the expert router and re-append the
       // reminder ask so it stays settable later — don't trap them in the
       // prompt (mirrors the pivot branch's free-form fallback).
-      fireThinkingAck(athleteRow.phone);
+      fireTypingIndicator(inboundSid);
       const memory = await getMemoryContext(athleteId);
       const routed = await route({
         message: body,
@@ -509,7 +513,7 @@ export async function processIncomingMessage(
     // message as a plan paste, so a runner who said "build it" got the
     // "that's not a plan, reply 'build it'" clarification forever — an
     // inescapable loop, with no code path actually handling "build it" here.
-    fireThinkingAck(athleteRow.phone);
+    fireTypingIndicator(inboundSid);
     const fast = fastPathChoice(body);
     const intent =
       fast === "build"
@@ -590,7 +594,7 @@ export async function processIncomingMessage(
     const fast = fastPathChoice(body);
     // A bare "a" tap replies instantly (no model call). Everything else does
     // slow work (LLM intent read, plan build, or ingest), so warn we're on it.
-    if (fast !== "byo") fireThinkingAck(athleteRow.phone);
+    if (fast !== "byo") fireTypingIndicator(inboundSid);
     const read = fast
       ? { intent: fast, reply: null as string | null }
       : await classifyPivotIntent({
@@ -732,9 +736,9 @@ export async function processIncomingMessage(
     replyText = buildConnectReply(status);
   } else {
     // Normal expert routing branch.
-    // V1: fire "thinking…" immediately — multi-domain routing can take
-    // 10-25s, so the runner needs a signal that MARP received the message.
-    fireThinkingAck(athleteRow.phone);
+    // Show the native "typing…" indicator immediately — multi-domain routing
+    // can take 10-25s, so the runner needs a signal that MARP is on it.
+    fireTypingIndicator(inboundSid);
     const memory = await getMemoryContext(athleteId);
     // v1.3 (A2): classify once up front so we can intercept a plan-edit
     // before the expensive expert pipeline. The routing is passed into
