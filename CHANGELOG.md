@@ -3,7 +3,19 @@
 All notable changes to marp-ai are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are semver in `package.json`.
 
-## [0.6.2] — 2026-06-10 — Adaptive plan pivot (dogfood fix)
+## [0.6.3] — 2026-06-10 — Native WhatsApp typing indicator
+
+### Changed
+- Replaced the literal "thinking…" text message — sent as its own bubble on
+  every LLM-bound turn — with the **native WhatsApp "typing…" indicator**
+  (Twilio Public Beta, Oct 2025). No more clutter bubble; the runner sees the
+  real typing affordance instead. Twilio references the inbound message SID,
+  marks it read, and shows the indicator until our reply lands or 25s elapses.
+  Best-effort and fire-and-forget: if the beta API fails the reply still sends,
+  just without the bubble. The webhook now threads the inbound Twilio SID into
+  `processIncomingMessage` so the LLM-bound branches can fire it. `thinking-ack`
+  module renamed to `typing-indicator`. Note: the indicator marks the runner's
+  message read (blue ticks) — inherent to the API.
 
 ### Fixed
 - The post-onboarding plan pivot ("do you already have a plan (a), or should I

@@ -73,6 +73,54 @@ async function sendOne(
 }
 
 /**
+ * Show the native WhatsApp "typing…" indicator (Twilio Public Beta, Oct 2025).
+ *
+ * References the INBOUND message SID; Twilio marks that message read and
+ * displays the typing bubble on the runner's device, which auto-clears when
+ * our reply is delivered or after 25 seconds, whichever comes first. This
+ * replaces the old literal "thinking…" text message — a real typing affordance
+ * instead of an extra chat bubble on every turn.
+ *
+ * Best-effort: returns false on any failure (beta API hiccup, missing creds,
+ * non-SM SID) so callers can fire-and-forget. The reply still sends; the runner
+ * just doesn't see the bubble. Never throws.
+ *
+ * Reference: https://www.twilio.com/docs/whatsapp/api/typing-indicators-resource
+ *
+ * @param inboundSid — the Twilio SID of the runner's inbound message (SM…/MM…).
+ */
+export async function sendTypingIndicator(inboundSid: string): Promise<boolean> {
+  const sid = config.twilio.accountSid;
+  const token = config.twilio.authToken;
+  if (!sid || !token || !inboundSid) return false;
+  const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  try {
+    const res = await fetch(
+      "https://messaging.twilio.com/v2/Indicators/Typing.json",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${auth}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          messageId: inboundSid,
+          channel: "whatsapp",
+        }).toString(),
+      },
+    );
+    if (!res.ok) {
+      console.error(`typing-indicator: Twilio returned ${res.status}`);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error("typing-indicator send failed:", err);
+    return false;
+  }
+}
+
+/**
  * Send a WhatsApp message via Twilio's REST API.
  *
  * Bodies over the per-message limit are split into multiple ordered
