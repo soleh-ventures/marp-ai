@@ -23,6 +23,7 @@ import {
   isAwaitingPivotChoice,
   withPivotState,
 } from "./post-onboarding-pivot.js";
+import { classifyPivotIntent, fastPathChoice } from "./pivot-intent.js";
 import { generatePlan } from "./plan/generator.js";
 import { ingestPlan } from "./plan/ingest.js";
 import { adjustPlan } from "./plan/adjust.js";
@@ -387,6 +388,38 @@ export async function processIncomingMessage(
   // KER-79 (Phase 2): holds the confirmation when the runner reverts a
   // coach-applied weekly adjustment ("keep it as it was").
   let revertReply: string | null = null;
+  // Adaptive pivot (build path): generate the plan in this turn, persist it +
+  // the best timezone, mark the pivot done, and return the runner-facing reply.
+  // Shared by the (b) choice branch and the "changed my mind, build it" escape
+  // out of awaiting_plan so the two can't drift. On generator failure returns a
+  // recoverable message rather than throwing.
+  const buildPlanForRunner = async (): Promise<string> => {
+    try {
+      const plan = await generatePlan({ athleteId, messageId });
+      await saveAthletePlan(athleteId, plan);
+      const updatedHistory = withPivotState(history, "done");
+      // F8c: Strava-derived tz (where they run) beats the phone dial code.
+      const tz = await bestTimezoneForAthlete(athleteId, athleteRow.phone);
+      await db
+        .update(athletes)
+        .set({
+          athleticHistory: updatedHistory,
+          ...(tz ? { timezone: tz } : {}),
+        })
+        .where(eq(athletes.id, athleteId));
+      // v1.3 (A3): draft-first hooks — invite collaboration on the fresh plan
+      // before the reminder ask. Empty string when the model had no open
+      // questions, so the message stays clean.
+      return renderPlanSummary(plan) + renderOpenQuestions(plan) + REMINDER_PROMPT;
+    } catch (err) {
+      console.error("plan-generator failed:", (err as Error).message);
+      return (
+        "Couldn't build the plan this turn — something went sideways on " +
+        "my side. Try again in a moment, or paste a plan you already have " +
+        "and I'll work from that."
+      );
+    }
+  };
   if (looksLikeDeletionRequest(body)) {
     // First-phase deletion request — reply with the confirmation prompt
     // regardless of onboarding state. The deletion-confirmation branch
@@ -471,35 +504,71 @@ export async function processIncomingMessage(
       routerFrame = routed.frame;
     }
   } else if (getPivotState(history) === "awaiting_plan") {
-    // V6: runner is in the BYO branch — anything they send next is
-    // treated as the pasted plan. Parse via LLM ingest, save, and
-    // confirm. On parse failure, send a friendly clarification so
-    // the runner can retry.
+    // Adaptive pivot: the runner chose BYO and we're waiting for the paste.
+    // Read intent first so they're NEVER trapped. The old code treated every
+    // message as a plan paste, so a runner who said "build it" got the
+    // "that's not a plan, reply 'build it'" clarification forever — an
+    // inescapable loop, with no code path actually handling "build it" here.
     fireThinkingAck(athleteRow.phone);
-    const result = await ingestPlan({ athleteId, messageId, pastedText: body });
-    if (result.ok) {
-      await saveAthletePlan(athleteId, result.plan);
-      const updatedHistory = withPivotState(history, "done");
-      // F8c: Strava-derived tz (where they run) beats the phone dial code.
-      const tz = await bestTimezoneForAthlete(athleteId, athleteRow.phone);
-      await db
-        .update(athletes)
-        .set({
-          athleticHistory: updatedHistory,
-          ...(tz ? { timezone: tz } : {}),
-        })
-        .where(eq(athletes.id, athleteId));
-      replyText = renderPlanSummary(result.plan) + REMINDER_PROMPT;
-    } else if (result.reason === "not_a_plan") {
-      replyText =
-        "That didn't look like a training plan to me — looked more like a " +
-        "general message. Paste the plan itself (week-by-week or a summary), " +
-        "or reply 'build it' if you'd rather I build one from scratch.";
+    const fast = fastPathChoice(body);
+    const intent =
+      fast === "build"
+        ? "build"
+        : fast === "byo"
+          ? "plan_content"
+          : (
+              await classifyPivotIntent({
+                athleteId,
+                messageId,
+                body,
+                phase: "awaiting_plan",
+              })
+            ).intent;
+
+    if (intent === "build") {
+      // Changed their mind — build it now (same path as the (b) choice).
+      replyText = await buildPlanForRunner();
+    } else if (intent === "question") {
+      // A genuine question while we wait for the paste. Answer it via the
+      // expert and keep awaiting_plan so they can still paste next turn —
+      // don't trap them, don't lose the BYO intent.
+      const memory = await getMemoryContext(athleteId);
+      const routed = await route({
+        message: body,
+        athleteId,
+        messageId,
+        contextSummary: memory.text,
+      });
+      replyText = routed.finalText.trim();
+      routerFrame = routed.frame;
     } else {
-      replyText =
-        "I downloaded the plan but couldn't quite parse it. Try splitting it " +
-        "into clear week sections (Week 1, Week 2…) and resend? Or reply " +
-        "'build it' and I'll build one from scratch.";
+      // plan_content / byo → treat as the pasted plan. Parse via LLM ingest,
+      // save, and confirm. On parse failure, a friendly clarification.
+      const result = await ingestPlan({ athleteId, messageId, pastedText: body });
+      if (result.ok) {
+        await saveAthletePlan(athleteId, result.plan);
+        const updatedHistory = withPivotState(history, "done");
+        // F8c: Strava-derived tz (where they run) beats the phone dial code.
+        const tz = await bestTimezoneForAthlete(athleteId, athleteRow.phone);
+        await db
+          .update(athletes)
+          .set({
+            athleticHistory: updatedHistory,
+            ...(tz ? { timezone: tz } : {}),
+          })
+          .where(eq(athletes.id, athleteId));
+        replyText = renderPlanSummary(result.plan) + REMINDER_PROMPT;
+      } else if (result.reason === "not_a_plan") {
+        replyText =
+          "That didn't look like a training plan to me — looked more like a " +
+          "general message. Paste the plan itself (week-by-week or a summary), " +
+          "or just say 'build it' and I'll create one from scratch.";
+      } else {
+        replyText =
+          "I downloaded the plan but couldn't quite parse it. Try splitting it " +
+          "into clear week sections (Week 1, Week 2…) and resend? Or say " +
+          "'build it' and I'll build one from scratch.";
+      }
     }
   } else if (
     isAwaitingPivotChoice(lastOutboundBody, history) ||
@@ -512,26 +581,43 @@ export async function processIncomingMessage(
     // prose and never called generatePlan. "other" still routes onward.
     (!getStoredPlan(history) && classifyPivotReply(body) !== "other")
   ) {
-    // V5: runner is responding to the post-onboarding pivot.
-    // Classify a/b; on "other", fall through to the expert router so
-    // a free-form question never traps the runner inside the pivot.
-    const choice = classifyPivotReply(body);
-    if (choice === "byo") {
-      replyText = PIVOT_REPLY_BYO;
+    // Adaptive pivot: read what the runner MEANS, not which keyword they hit.
+    // A bare "a"/"b" tap short-circuits (no model call); everything else gets
+    // an LLM intent read so natural phrasing like "(b) but my first day should
+    // be June 3rd" is honoured as (b) instead of mis-firing on the word
+    // "first". On "question" we route to the expert so a free-form reply never
+    // traps the runner inside the pivot.
+    const fast = fastPathChoice(body);
+    // A bare "a" tap replies instantly (no model call). Everything else does
+    // slow work (LLM intent read, plan build, or ingest), so warn we're on it.
+    if (fast !== "byo") fireThinkingAck(athleteRow.phone);
+    const read = fast
+      ? { intent: fast, reply: null as string | null }
+      : await classifyPivotIntent({
+          athleteId,
+          messageId,
+          body,
+          phase: "choice",
+        });
+
+    if (read.intent === "byo") {
+      // Coach-voice acknowledgement (LLM-generated, adapted to what they
+      // said); fall back to the static line only if the model gave none.
+      replyText = read.reply ?? PIVOT_REPLY_BYO;
       const updatedHistory = withPivotState(history, "awaiting_plan");
       await db
         .update(athletes)
         .set({ athleticHistory: updatedHistory })
         .where(eq(athletes.id, athleteId));
-    } else if (choice === "build") {
-      // V6: runner picked (b) — generate the plan in this same turn
-      // rather than asking them to send another "go" message.
-      fireThinkingAck(athleteRow.phone);
-      try {
-        const plan = await generatePlan({ athleteId, messageId });
-        await saveAthletePlan(athleteId, plan);
+    } else if (read.intent === "build") {
+      // Runner picked (b) — generate the plan in this same turn.
+      replyText = await buildPlanForRunner();
+    } else if (read.intent === "plan_content") {
+      // They pasted an actual plan instead of choosing — ingest it directly.
+      const result = await ingestPlan({ athleteId, messageId, pastedText: body });
+      if (result.ok) {
+        await saveAthletePlan(athleteId, result.plan);
         const updatedHistory = withPivotState(history, "done");
-        // F8c: Strava-derived tz (where they run) beats the phone dial code.
         const tz = await bestTimezoneForAthlete(athleteId, athleteRow.phone);
         await db
           .update(athletes)
@@ -540,23 +626,22 @@ export async function processIncomingMessage(
             ...(tz ? { timezone: tz } : {}),
           })
           .where(eq(athletes.id, athleteId));
-        // v1.3 (A3): draft-first hooks — invite collaboration on the fresh
-        // plan before the reminder ask. Empty string when the model had no
-        // open questions, so the message stays clean.
+        replyText = renderPlanSummary(result.plan) + REMINDER_PROMPT;
+      } else {
+        // Looked like a paste but didn't parse — move into awaiting_plan so the
+        // next message is handled as the (clarified) paste rather than re-asked.
+        const updatedHistory = withPivotState(history, "awaiting_plan");
+        await db
+          .update(athletes)
+          .set({ athleticHistory: updatedHistory })
+          .where(eq(athletes.id, athleteId));
         replyText =
-          renderPlanSummary(plan) + renderOpenQuestions(plan) + REMINDER_PROMPT;
-      } catch (err) {
-        console.error("plan-generator failed:", (err as Error).message);
-        replyText =
-          "Couldn't build the plan this turn — something went sideways on " +
-          "my side. Try again in a moment, or paste a plan you already have " +
-          "and I'll work from that.";
+          "I couldn't quite parse that as a plan. Paste it week-by-week (Week 1, " +
+          "Week 2…) or as a summary, or just say 'build it' and I'll create one.";
       }
     } else {
-      // Ambiguous reply — route to the expert. Don't auto-clear the
-      // pivot_state; the runner can still answer a/b on the next turn
-      // if they want to.
-      fireThinkingAck(athleteRow.phone);
+      // Question / small talk — route to the expert. Don't clear pivot_state;
+      // the runner can still answer a/b on the next turn.
       const memory = await getMemoryContext(athleteId);
       const result = await route({
         message: body,

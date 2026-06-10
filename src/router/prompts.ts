@@ -177,6 +177,13 @@ export function getSafetyTriagePrompt(): string {
   return loadFile("safety-triage.md").body;
 }
 
+// Adaptive plan-pivot intent read — replaces the brittle keyword classifier at
+// the "do you have a plan (a) or build one (b)?" moment so MARP adapts to any
+// phrasing. See src/services/pivot-intent.ts.
+export function getPivotIntentPrompt(): string {
+  return loadFile("pivot-intent.md").body;
+}
+
 export function getDomainPromptFile(domain: Domain): PromptFile {
   return loadFile(`domains/${domain}.md`);
 }
@@ -196,6 +203,7 @@ export function validateAllPrompts(): void {
   loadFile("retro-proposal.md");
   loadFile("weekly-evaluation.md");
   loadFile("safety-triage.md");
+  loadFile("pivot-intent.md");
   for (const d of DOMAINS) {
     loadFile(`domains/${d}.md`);
   }

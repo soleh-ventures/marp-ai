@@ -114,6 +114,38 @@ describe("classifyPivotReply — other / fall-through", () => {
   });
 });
 
+describe("classifyPivotReply — ordinal regression (dogfood bug)", () => {
+  // The reported bug: a runner answered "(B) but my first day…" and MARP read
+  // it as option (a) and sent the BYO "paste your plan" line. Two faults: a
+  // bare /first/ test matched the temporal "first day", and the explicit "(B)"
+  // never won when wrapped in other text. Both are fixed here.
+  test("explicit (B) wins even with a trailing 'first day' phrase", () => {
+    expect(
+      classifyPivotReply(
+        "(B) but my first day of training plan should start already on 3rd of June",
+      ),
+    ).toBe("build");
+  });
+
+  test("temporal 'first day' is NOT read as option a", () => {
+    expect(classifyPivotReply("my first day should be June 3rd")).not.toBe(
+      "byo",
+    );
+  });
+
+  test("decorated (a)/(b) with trailing text still wins", () => {
+    expect(classifyPivotReply("(a) I'll paste what I have tomorrow")).toBe(
+      "byo",
+    );
+    expect(classifyPivotReply("b) go ahead and build it")).toBe("build");
+  });
+
+  test("ordinal still works when bound to an option word", () => {
+    expect(classifyPivotReply("the first one")).toBe("byo");
+    expect(classifyPivotReply("second option")).toBe("build");
+  });
+});
+
 describe("isAwaitingPivotChoice", () => {
   test("true when lastOutbound has the pivot signature and no pivot_state yet", () => {
     const out = `Welcome! ${PIVOT_QUESTION}`;
