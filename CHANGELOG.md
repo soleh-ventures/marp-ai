@@ -3,6 +3,28 @@
 All notable changes to marp-ai are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are semver in `package.json`.
 
+## [0.6.2] — 2026-06-10 — Adaptive plan pivot (dogfood fix)
+
+### Fixed
+- The post-onboarding plan pivot ("do you already have a plan (a), or should I
+  build one (b)?") had two compounding bugs found in dogfooding. (1) A bare
+  ordinal heuristic read the word "first" as option (a), so a reply like
+  "(B) but my first day should be June 3rd" was mis-classified as BYO and got
+  the "paste your plan" line — the explicit (B) never won. (2) Once in the
+  BYO/`awaiting_plan` state, every message was treated as a pasted plan with
+  no handler for "build it", so a runner who changed their mind looped on the
+  same "that's not a plan" clarification forever. Both are fixed: the pivot now
+  reads intent with an LLM (`pivot-intent.ts`) so it adapts to any phrasing, a
+  bare "a"/"b" tap still short-circuits with no model call, and `awaiting_plan`
+  now escapes to the build path on "build it" and routes real questions to the
+  expert. The byo acknowledgement is LLM-generated (coach voice) instead of a
+  fixed string; the old canned lines remain only as failure-path fallbacks.
+
+### Added
+- `prompts/pivot-intent.md` + `src/services/pivot-intent.ts` — adaptive intent
+  read (byo / build / plan_content / question) for the plan pivot, with a
+  prompt-injection guard and a deterministic fallback when the LLM read fails.
+
 ## [0.6.1] — 2026-06-08 — Grounded Coach: week-anchor fix (dogfood)
 
 ### Fixed

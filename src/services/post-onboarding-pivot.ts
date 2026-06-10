@@ -120,7 +120,27 @@ function extractChoiceLetter(body: string): "a" | "b" | null {
   return null;
 }
 
+// Synchronous, keyword-level read. As of the adaptive-pivot fix this is no
+// longer the primary decision-maker — process-incoming reads intent with an
+// LLM (pivot-intent.ts) so MARP adapts to any phrasing. This stays as the cheap
+// gate for the RC1 fallback (deciding whether a planless runner's message even
+// LOOKS like a pivot reply worth handling) and as the deterministic fallback
+// when the LLM read fails. So it must stay conservative: prefer "other" over a
+// wrong guess.
 export function classifyPivotReply(body: string): PivotChoice {
+  // An explicit decorated option marker at the very start wins, even with
+  // trailing text: "(b) but my first day should be June 3rd" is a clear (b).
+  // Note we only honour DECORATED letters here ("(b)", "b)", "b.") — a bare
+  // leading "a"/"b" is too easily an article ("a tempo run") and is left to the
+  // filler-strip extractor below, which requires the whole message to reduce to
+  // the letter.
+  const explicit = body.match(/^\s*(?:\(([ab])\)|([ab])[).:])/i);
+  if (explicit) {
+    const marker = (explicit[1] ?? explicit[2] ?? "").toLowerCase();
+    if (marker === "a") return "byo";
+    if (marker === "b") return "build";
+  }
+
   if (BYO_DESCRIPTIVE.some((re) => re.test(body))) return "byo";
   if (BUILD_DESCRIPTIVE.some((re) => re.test(body))) return "build";
 
@@ -128,12 +148,21 @@ export function classifyPivotReply(body: string): PivotChoice {
   if (letter === "a") return "byo";
   if (letter === "b") return "build";
 
-  // Ordinal phrasings — "the first one" / "second option". Only when
-  // exactly one of the two is referenced (avoid "first or second?").
-  const first = /\b(first|1st)\b/i.test(body);
-  const second = /\b(second|2nd)\b/i.test(body);
-  if (first && !second) return "byo";
-  if (second && !first) return "build";
+  // Ordinal phrasings — "the first one" / "second option". The ordinal must be
+  // BOUND to an option word; a bare /first|second/ test mis-fired on temporal
+  // language ("my first day of training" → wrongly read as option a, the
+  // original bug). Only when exactly one side is referenced (avoid "first or
+  // second?").
+  const firstOpt =
+    /\b(first|1st)\s+(option|one|choice)\b|\b(option|choice)\s+(one|1|first)\b/i.test(
+      body,
+    );
+  const secondOpt =
+    /\b(second|2nd)\s+(option|one|choice)\b|\b(option|choice)\s+(two|2|second)\b/i.test(
+      body,
+    );
+  if (firstOpt && !secondOpt) return "byo";
+  if (secondOpt && !firstOpt) return "build";
 
   return "other";
 }
