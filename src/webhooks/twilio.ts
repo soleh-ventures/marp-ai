@@ -77,10 +77,16 @@ twilioWebhook.post("/whatsapp", async (c) => {
 
   const athlete = await findOrCreateByPhone(from);
 
+  // Twilio numbers media MediaUrl0..N. Collect ALL of them so a plan split
+  // across several photos / files is read together. mediaUrl (the first) is
+  // still stored on the message row + used by the fitness-file fast path.
   const numMedia = Number(params.NumMedia ?? "0");
-  const mediaUrl = numMedia > 0 ? (params.MediaUrl0 ?? null) : null;
-  const mediaContentType =
-    numMedia > 0 ? (params.MediaContentType0 ?? null) : null;
+  const allMedia: { url: string; contentType?: string }[] = [];
+  for (let i = 0; i < numMedia; i++) {
+    const u = params[`MediaUrl${i}`];
+    if (u) allMedia.push({ url: u, contentType: params[`MediaContentType${i}`] });
+  }
+  const mediaUrl = allMedia[0]?.url ?? null;
 
   const [inserted] = await db
     .insert(messages)
@@ -111,10 +117,12 @@ twilioWebhook.post("/whatsapp", async (c) => {
     inserted.id,
     bodyText,
     mediaUrl,
-    mediaContentType,
+    allMedia[0]?.contentType ?? null,
     // Pass the inbound Twilio SID so the LLM-bound branches can show the
     // native WhatsApp "typing…" indicator (referencing this message).
     sid,
+    // All attachments, so a multi-file plan upload is read together.
+    allMedia,
   )
     .catch((err) => {
       console.error("processIncoming failed:", err);

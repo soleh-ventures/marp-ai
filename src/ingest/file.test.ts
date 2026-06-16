@@ -1,5 +1,11 @@
-import { describe, expect, test } from "bun:test";
-import { detectFormat } from "./file.js";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { config } from "../config.js";
+import {
+  detectFormat,
+  isTextDocument,
+  isFitnessFile,
+  fetchMediaBytes,
+} from "./file.js";
 
 // detectFormat is the only pure function in src/ingest/file.ts —
 // everything else does network I/O and DB writes that are covered
@@ -59,5 +65,100 @@ describe("detectFormat", () => {
     expect(
       detectFormat("https://x.example/abc.gpx", "application/octet-stream", ""),
     ).toBe("gpx");
+  });
+});
+
+// A long BYO plan sent as a text file (to dodge Twilio's 1600-char paste cap).
+describe("isTextDocument", () => {
+  test.each([
+    ["https://api.twilio.com/Media/ME123.txt", undefined],
+    ["https://x/file.TXT", undefined],
+    ["https://x/plan.md", undefined],
+    ["https://x/plan.csv", undefined],
+    ["https://x/media/ME999", "text/plain"],
+    ["https://x/media/ME999", "text/plain; charset=utf-8"],
+  ])("treats %p (%p) as a text document", (url, ct) => {
+    expect(isTextDocument(url, ct)).toBe(true);
+  });
+
+  test.each([
+    ["https://x/run.gpx", "application/gpx+xml"],
+    ["https://x/plan.pdf", "application/pdf"],
+    ["https://x/photo.jpg", "image/jpeg"],
+    ["https://x/media/ME1", undefined],
+    ["https://x/media/ME1", "application/octet-stream"],
+  ])("does NOT treat %p (%p) as a text document", (url, ct) => {
+    expect(isTextDocument(url, ct)).toBe(false);
+  });
+});
+
+describe("isFitnessFile", () => {
+  test.each([
+    ["https://x/run.gpx", undefined],
+    ["https://x/a.fit", undefined],
+    ["https://x/a.tcx", undefined],
+    ["https://x/media", "application/gpx+xml"],
+  ])("treats %p (%p) as a fitness file", (url, ct) => {
+    expect(isFitnessFile(url, ct)).toBe(true);
+  });
+
+  test.each([
+    ["https://x/plan.txt", "text/plain"],
+    ["https://x/plan.pdf", "application/pdf"],
+    ["https://x/photo.jpg", "image/jpeg"],
+    ["https://x/plan.docx", undefined],
+  ])("does NOT treat %p (%p) as a fitness file", (url, ct) => {
+    expect(isFitnessFile(url, ct)).toBe(false);
+  });
+});
+
+describe("fetchMediaBytes", () => {
+  const realFetch = globalThis.fetch;
+  const realSid = config.twilio.accountSid;
+  const realToken = config.twilio.authToken;
+  type Cfg = { accountSid: string; authToken: string };
+
+  beforeEach(() => {
+    (config.twilio as Cfg).accountSid = "AC_test";
+    (config.twilio as Cfg).authToken = "tok_test";
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    (config.twilio as Cfg).accountSid = realSid;
+    (config.twilio as Cfg).authToken = realToken;
+  });
+
+  test("downloads bytes (auth header set)", async () => {
+    let auth = "";
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      auth = String((init.headers as Record<string, string>).Authorization);
+      return new Response("hello bytes", { status: 200 });
+    }) as unknown as typeof fetch;
+    const r = await fetchMediaBytes("https://x/media");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.bytes.toString("utf-8")).toBe("hello bytes");
+    expect(auth.startsWith("Basic ")).toBe(true);
+  });
+
+  test("download failure → download_failed (no throw)", async () => {
+    globalThis.fetch = (async () =>
+      new Response("nope", { status: 404 })) as unknown as typeof fetch;
+    const r = await fetchMediaBytes("https://x/media");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("download_failed");
+  });
+
+  test("missing Twilio creds → missing_credentials, no fetch", async () => {
+    (config.twilio as Cfg).accountSid = "";
+    (config.twilio as Cfg).authToken = "";
+    let called = false;
+    globalThis.fetch = (async () => {
+      called = true;
+      return new Response("x", { status: 200 });
+    }) as unknown as typeof fetch;
+    const r = await fetchMediaBytes("https://x/media");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("missing_credentials");
+    expect(called).toBe(false);
   });
 });

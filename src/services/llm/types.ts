@@ -5,10 +5,29 @@
 // schema check at the call site. If we add real tool_use, add a second
 // method here (callTool) rather than overloading callText.
 
+// Multimodal input attached to a request. Images and PDFs go to the model as
+// native vision/document blocks (Anthropic supports both via base64). Used by
+// the document-ingest path to "read" a runner's uploaded plan (screenshot,
+// photo, PDF) at full fidelity. Office formats (docx/xlsx) are NOT here — they
+// get extracted to text upstream, since the API can't read them directly.
+export type LlmImageMediaType =
+  | "image/png"
+  | "image/jpeg"
+  | "image/gif"
+  | "image/webp";
+
+export type MediaInput =
+  | { kind: "image"; mediaType: LlmImageMediaType; dataBase64: string }
+  | { kind: "pdf"; dataBase64: string };
+
 export type LlmRequest = {
   model: string;
   system: string;
   user: string;
+  // Optional image/PDF blocks sent alongside the user text. When present the
+  // provider builds a multimodal content array; when absent it sends plain
+  // text (the common path). Only vision-capable models should receive these.
+  media?: MediaInput[];
   // Hard cap on output tokens — Anthropic requires this. Keep low for
   // classifier (~50), higher for domain answers (~1500), highest for
   // synthesizer (~2000).

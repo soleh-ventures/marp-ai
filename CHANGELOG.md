@@ -3,6 +3,31 @@
 All notable changes to marp-ai are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are semver in `package.json`.
 
+## [0.7.0] — 2026-06-16 — Read a BYO plan from any file (vision + Office + multi-file)
+
+### Added
+- A runner can now hand MARP their existing plan in almost any form and MARP
+  reads the whole thing: a **photo or screenshot** (including printed or
+  handwritten plans), a **PDF**, a **Word (.docx)** or **Excel (.xlsx)** file, a
+  **.txt**, or **several files at once**. New `src/ingest/document.ts`
+  (`extractDocuments`) turns each attachment into text — images/PDF via Claude
+  vision (`LLM_VISION_MODEL`, Sonnet), .docx via `mammoth`, .xlsx via `exceljs`,
+  text decoded directly — then routes the combined text to the existing plan
+  parser. This sidesteps Twilio's 1600-char inbound cap that was silently
+  dropping long pasted plans (the dogfood bug from v0.6.x).
+- The LLM layer now accepts multimodal input: `LlmRequest.media` carries image
+  /PDF blocks, built into the Anthropic content array in the provider.
+- The webhook collects all `MediaUrl0..N` so a plan split across several files
+  in one message is read together. Fitness files (GPX/FIT/TCX) still route to
+  activity ingestion. Caps: 5 files, 5 MB each, 8000-token transcription.
+
+### Changed
+- BYO prompt + dead-end recovery copy now tell runners they can send a long
+  plan as a photo / PDF / Word / Excel / .txt file, or split it.
+
+### Dependencies
+- Added `mammoth` (.docx → text) and `exceljs` (.xlsx → text).
+
 ## [0.6.3] — 2026-06-10 — Native WhatsApp typing indicator
 
 ### Changed
