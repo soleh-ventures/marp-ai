@@ -5,6 +5,7 @@ import {
   getAthleticHistory,
   isOnboarded,
   runOnboardingTurn,
+  type AthleticHistory,
 } from "../flows/onboarding.js";
 import { getMemoryContext } from "../memory/retrieve.js";
 import { route } from "../router/index.js";
@@ -82,7 +83,8 @@ import { extractRunFeeling } from "./run-feeling.js";
 import { applyProposalResolution } from "./run-retro.js";
 import type { BindResult } from "./binder.js";
 import { autoTransitionStaleBlocks } from "../memory/summarize.js";
-import { ingestFileFromMediaUrl } from "../ingest/file.js";
+import { ingestFileFromMediaUrl, isFitnessFile } from "../ingest/file.js";
+import { extractDocuments, type MediaItem } from "../ingest/document.js";
 import {
   CONSENT_AMBIGUOUS_REPLY,
   CONSENT_DECLINED_REPLY,
@@ -100,6 +102,101 @@ import {
   DORMANCY_RESUME_MESSAGE,
   classifyDormancyResponse,
 } from "./dormancy-intent.js";
+
+// Ingest a BYO plan (pasted text OR the contents of an uploaded text file),
+// persist it, advance pivot_state → done, and return the runner-facing reply
+// (plan summary on success, a recoverable clarification on failure). Shared by
+// the text-paste path, the choice-step paste, and the long-plan-as-file path
+// so all three behave identically.
+async function ingestAndSaveByoPlan(input: {
+  athleteId: string;
+  messageId: string;
+  phone: string;
+  history: AthleticHistory;
+  pastedText: string;
+}): Promise<string> {
+  const result = await ingestPlan({
+    athleteId: input.athleteId,
+    messageId: input.messageId,
+    pastedText: input.pastedText,
+  });
+  if (result.ok) {
+    await saveAthletePlan(input.athleteId, result.plan);
+    const updatedHistory = withPivotState(input.history, "done");
+    // F8c: Strava-derived tz (where they run) beats the phone dial code.
+    const tz = await bestTimezoneForAthlete(input.athleteId, input.phone);
+    await db
+      .update(athletes)
+      .set({
+        athleticHistory: updatedHistory,
+        ...(tz ? { timezone: tz } : {}),
+      })
+      .where(eq(athletes.id, input.athleteId));
+    return renderPlanSummary(result.plan) + REMINDER_PROMPT;
+  }
+  if (result.reason === "not_a_plan") {
+    return (
+      "That didn't look like a training plan to me — looked more like a " +
+      "general message. Paste the plan itself (week-by-week or a summary), " +
+      "or just say 'build it' and I'll create one from scratch."
+    );
+  }
+  return (
+    "I downloaded the plan but couldn't quite parse it. Try splitting it " +
+    "into clear week sections (Week 1, Week 2…) and resend? Or say " +
+    "'build it' and I'll build one from scratch."
+  );
+}
+
+// Copy for a runner who clearly TRIED to send a plan but it never arrived —
+// the WhatsApp/Twilio 1600-char cap silently drops a long paste before it
+// reaches us, so we can't see it to say anything smarter. Explain + offer the
+// two ways through (text file, or split it). Also reused on a doc that failed
+// to download.
+const PLAN_NOT_RECEIVED_REPLY =
+  "I didn't get any plan text — heads up, WhatsApp drops messages longer than " +
+  "~1600 characters before they reach me, so a long paste won't come through. " +
+  "Two ways to get it to me:\n" +
+  "• Send it as a file (tap 📎) — a photo/screenshot, PDF, Word, Excel, or " +
+  ".txt all work, any length\n" +
+  "• Or split it into 2-3 shorter messages\n\n" +
+  "Or just say 'build it' and I'll make one from scratch.";
+
+// Conservative detection of "I (already) sent/pasted the plan" — a short
+// message claiming a paste landed. Used only while we're waiting for the plan,
+// to recover the dead-end where a too-long paste vanished. Kept tight (short
+// messages, explicit verbs) to avoid stealing real questions from the expert.
+function looksLikePasteClaim(body: string): boolean {
+  const t = body.trim();
+  if (t.length === 0 || t.length > 90) return false;
+  if (/\b(pasted|sent|shared|posted|attached|typed|copied)\b/i.test(t)) return true;
+  // "did you get it?", "do you see the plan?", "got it?"
+  return /\b(get|got|see|receive[d]?|got)\b.{0,18}\b(it|that|the\s+plan|my\s+plan|message)\b/i.test(
+    t,
+  );
+}
+
+// Friendly copy for an uploaded plan that arrived but couldn't be read.
+function planDocErrorReply(
+  reason: "no_supported_files" | "all_failed" | "missing_credentials",
+): string {
+  if (reason === "no_supported_files") {
+    return (
+      "I got your file, but it's not a format I can read as a plan. Send it as " +
+      "a photo/screenshot, a PDF, a Word (.docx) or Excel (.xlsx) file, or a " +
+      ".txt — or just say 'build it' and I'll create one from scratch."
+    );
+  }
+  if (reason === "missing_credentials") {
+    return "I couldn't fetch that file just now — try sending it again in a moment, or paste the plan in chat.";
+  }
+  // all_failed
+  return (
+    "I couldn't read that file. If it's a photo, make sure the text is in focus " +
+    "and try again; otherwise send it as a PDF or .txt, or paste the key weeks " +
+    "in chat. Or say 'build it' and I'll make one."
+  );
+}
 
 // Fired from the webhook AFTER we've returned 200 to Twilio. Branches:
 //   - Athlete not onboarded → onboarding flow (one LLM call, extracts +
@@ -123,7 +220,20 @@ export async function processIncomingMessage(
   // WhatsApp "typing…" indicator while we work. Optional so non-Twilio-driven
   // callers (tests, synthetic turns) skip the indicator instead of breaking.
   inboundSid?: string | null,
+  // ALL attachments on this message (Twilio MediaUrl0..N). The plan-document
+  // path reads every one (a long plan split across photos, a .docx, etc.);
+  // the legacy fitness-file path uses mediaUrl (the first). Defaults to the
+  // single (mediaUrl, mediaContentType) pair when not supplied.
+  media?: MediaItem[],
 ): Promise<void> {
+  // The full attachment list — prefer the explicit array; fall back to the
+  // single legacy pair so existing callers keep working.
+  const allMedia: MediaItem[] =
+    media && media.length > 0
+      ? media
+      : mediaUrl
+        ? [{ url: mediaUrl, contentType: mediaContentType ?? undefined }]
+        : [];
   // Pull phone + athletic_history in one query — we need both regardless
   // of which branch we take.
   const athleteRow = (
@@ -299,25 +409,56 @@ export async function processIncomingMessage(
   // drift this.
   await touchLastSeen(athleteId);
 
-  // ── File ingest (ET15) ───────────────────────────────────────────────
-  // If the runner attached a fitness file (GPX today; FIT/TCX get a
-  // friendly reject), short-circuit the LLM router. The file becomes
-  // an activity row and the reply is a confirmation summarising what
-  // we extracted. Subsequent training questions can reference it via
-  // memory context on the next turn.
-  if (mediaUrl) {
+  // ── Fitness file ingest (ET15) ───────────────────────────────────────
+  // A GPX (FIT/TCX get a friendly reject) becomes an activity row — short
+  // circuit the router. ONLY fitness files run here; plan documents (photos,
+  // PDFs, Word/Excel, .txt) are handled by the plan-upload path below, which
+  // needs the runner's pivot state.
+  if (allMedia[0] && isFitnessFile(allMedia[0].url, allMedia[0].contentType)) {
     const reply = await handleFileUpload(
       athleteId,
-      mediaUrl,
-      mediaContentType ?? undefined,
+      allMedia[0].url,
+      allMedia[0].contentType ?? undefined,
     );
     if (reply !== null) {
       await sendAndPersist(athleteId, athleteRow.phone, reply);
       return;
     }
-    // null reply = not a recognised fitness file. Fall through to the
-    // normal routing branches so an attached image / voice note doesn't
-    // get treated as a silent failure.
+    // null reply = couldn't read it. Fall through to normal routing.
+  }
+
+  const history = getAthleticHistory(athleteRow.athleticHistory);
+
+  // ── Uploaded BYO plan (any format, one or many files) ────────────────
+  // A pasted plan hits Twilio's 1600-char inbound cap and silently vanishes
+  // (dogfood bug). A file attachment has no such limit. If the runner is in a
+  // plan-accepting state and sent plan documents (photo / screenshot / PDF /
+  // Word / Excel / .txt — anything that isn't a fitness file), read them ALL
+  // and route the combined text to the plan parser. Returns early (like the
+  // fitness path) so file uploads skip the binder/flag work below.
+  const planDocs = allMedia.filter((m) => !isFitnessFile(m.url, m.contentType));
+  if (planDocs.length > 0) {
+    const pivotState = getPivotState(history);
+    const inPlanPaste =
+      pivotState === "awaiting_plan" ||
+      (!getStoredPlan(history) && isAwaitingPivotChoice(lastOutboundBody, history));
+    if (inPlanPaste) {
+      fireTypingIndicator(inboundSid);
+      // Read every attachment (photo / screenshot / PDF / .docx / .xlsx /
+      // .txt, one or several) into one text corpus, then parse as the plan.
+      const extracted = await extractDocuments(planDocs, { athleteId, messageId });
+      const reply = extracted.ok
+        ? await ingestAndSaveByoPlan({
+            athleteId,
+            messageId,
+            phone: athleteRow.phone,
+            history,
+            pastedText: extracted.text,
+          })
+        : planDocErrorReply(extracted.reason);
+      await sendAndPersist(athleteId, athleteRow.phone, reply);
+      return;
+    }
   }
 
   // ── Binder (ET7) + Flag detection (T11) ─────────────────────────────
@@ -367,8 +508,6 @@ export async function processIncomingMessage(
       console.error("proposal apply threw:", err);
     });
   }
-
-  const history = getAthleticHistory(athleteRow.athleticHistory);
 
   let replyText: string;
   // ET6: if the expert router emits a decision_frame, we persist it
@@ -533,46 +672,35 @@ export async function processIncomingMessage(
       // Changed their mind — build it now (same path as the (b) choice).
       replyText = await buildPlanForRunner();
     } else if (intent === "question") {
-      // A genuine question while we wait for the paste. Answer it via the
-      // expert and keep awaiting_plan so they can still paste next turn —
-      // don't trap them, don't lose the BYO intent.
-      const memory = await getMemoryContext(athleteId);
-      const routed = await route({
-        message: body,
+      if (looksLikePasteClaim(body)) {
+        // They think they sent the plan but we have nothing — almost always a
+        // >1600-char paste that Twilio dropped before it reached us. Explain
+        // the limit + the two ways through instead of a blank "I don't see it."
+        replyText = PLAN_NOT_RECEIVED_REPLY;
+      } else {
+        // A genuine question while we wait for the paste. Answer it via the
+        // expert and keep awaiting_plan so they can still paste next turn —
+        // don't trap them, don't lose the BYO intent.
+        const memory = await getMemoryContext(athleteId);
+        const routed = await route({
+          message: body,
+          athleteId,
+          messageId,
+          contextSummary: memory.text,
+        });
+        replyText = routed.finalText.trim();
+        routerFrame = routed.frame;
+      }
+    } else {
+      // plan_content / byo → treat as the pasted plan (ingest, save, confirm;
+      // recoverable clarification on parse failure).
+      replyText = await ingestAndSaveByoPlan({
         athleteId,
         messageId,
-        contextSummary: memory.text,
+        phone: athleteRow.phone,
+        history,
+        pastedText: body,
       });
-      replyText = routed.finalText.trim();
-      routerFrame = routed.frame;
-    } else {
-      // plan_content / byo → treat as the pasted plan. Parse via LLM ingest,
-      // save, and confirm. On parse failure, a friendly clarification.
-      const result = await ingestPlan({ athleteId, messageId, pastedText: body });
-      if (result.ok) {
-        await saveAthletePlan(athleteId, result.plan);
-        const updatedHistory = withPivotState(history, "done");
-        // F8c: Strava-derived tz (where they run) beats the phone dial code.
-        const tz = await bestTimezoneForAthlete(athleteId, athleteRow.phone);
-        await db
-          .update(athletes)
-          .set({
-            athleticHistory: updatedHistory,
-            ...(tz ? { timezone: tz } : {}),
-          })
-          .where(eq(athletes.id, athleteId));
-        replyText = renderPlanSummary(result.plan) + REMINDER_PROMPT;
-      } else if (result.reason === "not_a_plan") {
-        replyText =
-          "That didn't look like a training plan to me — looked more like a " +
-          "general message. Paste the plan itself (week-by-week or a summary), " +
-          "or just say 'build it' and I'll create one from scratch.";
-      } else {
-        replyText =
-          "I downloaded the plan but couldn't quite parse it. Try splitting it " +
-          "into clear week sections (Week 1, Week 2…) and resend? Or say " +
-          "'build it' and I'll build one from scratch.";
-      }
     }
   } else if (
     isAwaitingPivotChoice(lastOutboundBody, history) ||

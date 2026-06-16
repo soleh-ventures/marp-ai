@@ -42,8 +42,11 @@ Return exactly one object:
 
 - `reply`: ONLY when intent is `byo`. Write 1-2 warm, natural sentences in a
   coach's voice inviting them to paste their plan (week-by-week or a summary
-  both fine), adapted to what they actually said. No emojis required, no canned
-  phrasing. For every other intent, set `reply` to null.
+  both fine), adapted to what they actually said. If the plan is likely long,
+  add that they can send it as a file instead — a photo/screenshot, PDF, Word,
+  Excel, or .txt — or split it into a few messages (WhatsApp drops single
+  messages over ~1600 characters). No emojis required, no canned phrasing. For
+  every other intent, set `reply` to null.
 
 # Examples
 - "(b) but my first day of training should start June 3rd" →

@@ -23,13 +23,34 @@ export class AnthropicProvider implements LlmProvider {
       ? [{ type: "text" as const, text: req.system, cache_control: { type: "ephemeral" as const } }]
       : req.system;
 
+    // Multimodal: when image/PDF blocks are attached, the user turn becomes a
+    // content array (media blocks first, then the text instruction). Plain text
+    // otherwise — the common path, unchanged.
+    const userContent: Anthropic.MessageParam["content"] =
+      req.media && req.media.length > 0
+        ? [
+            ...req.media.map((m): Anthropic.ContentBlockParam =>
+              m.kind === "image"
+                ? {
+                    type: "image",
+                    source: { type: "base64", media_type: m.mediaType, data: m.dataBase64 },
+                  }
+                : {
+                    type: "document",
+                    source: { type: "base64", media_type: "application/pdf", data: m.dataBase64 },
+                  },
+            ),
+            { type: "text", text: req.user },
+          ]
+        : req.user;
+
     const t0 = Date.now();
     const res = await this.client.messages.create({
       model: req.model,
       max_tokens: req.maxTokens,
       temperature: req.temperature ?? 0,
       system: systemBlock,
-      messages: [{ role: "user", content: req.user }],
+      messages: [{ role: "user", content: userContent }],
     });
     const latencyMs = Date.now() - t0;
 

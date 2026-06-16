@@ -49,7 +49,9 @@ export const PIVOT_QUESTION =
 
 export const PIVOT_REPLY_BYO =
   "Great — paste your plan in chat. Week-by-week or a summary both work; " +
-  "I'll capture the structure and we'll coach from it. Take your time.";
+  "I'll capture the structure and we'll coach from it. If it's long, you can " +
+  "also send it as a file (📎) — a photo or screenshot, PDF, Word, Excel, or " +
+  ".txt — or split it into a few messages. Take your time.";
 
 export const PIVOT_REPLY_BUILD =
   "Great — I'll build one with you. We'll start with the macro shape " +

@@ -59,6 +59,9 @@ export const config = {
     // Binder runs on every free-form fork reply. Separate var so we can
     // tune classifier ↔ binder independently (eng review CQ1).
     binderModel: process.env.LLM_BINDER_MODEL ?? "claude-haiku-4-5",
+    // Vision/document reader for uploaded files (a plan sent as a photo,
+    // screenshot, or PDF). Must be a multimodal model — Sonnet by default.
+    visionModel: process.env.LLM_VISION_MODEL ?? "claude-sonnet-4-6",
   },
   safety: {
     // S1 (KER-29): when a Tier-0 emergency is triaged, best-effort alert

@@ -114,6 +114,23 @@ export async function ingestFileFromMediaUrl(
   };
 }
 
+// ── BYO plan delivered as a text document ────────────────────────────────
+//
+// Twilio caps inbound message BODIES at 1600 chars (error 21617) — a long
+// pasted training plan silently never reaches us. A document attachment is a
+// download link instead, with no body-length limit, so a runner can send a
+// long plan as a .txt and we ingest its contents. Text only for now; PDF /
+// images need extraction/OCR we don't do yet (rejected gracefully upstream).
+
+// Is this media attachment a plain-text document (vs a binary fitness file /
+// image / PDF)? WhatsApp delivers a .txt as text/plain.
+export function isTextDocument(url: string, contentType?: string): boolean {
+  const lcUrl = url.toLowerCase();
+  if (/\.(txt|md|csv|text)$/.test(lcUrl)) return true;
+  const lcType = (contentType ?? "").toLowerCase();
+  return lcType.startsWith("text/");
+}
+
 // ── Format detection ────────────────────────────────────────────────────
 
 export function detectFormat(
@@ -150,11 +167,16 @@ export function detectFormat(
 type FetchOk = { ok: true; text: string };
 type FetchFail = { ok: false; reason: IngestRejectReason; detail?: string };
 
-async function fetchMedia(
+type BytesOk = { ok: true; bytes: Buffer };
+
+// Download Twilio media (authenticated) into a byte buffer with a hard cap.
+// Shared by the text decoder (fetchMedia) and the binary path used for
+// images/PDF/Office docs (fetchMediaBytes).
+async function fetchMediaBytesInternal(
   url: string,
   sid: string,
   token: string,
-): Promise<FetchOk | FetchFail> {
+): Promise<BytesOk | FetchFail> {
   const auth = Buffer.from(`${sid}:${token}`).toString("base64");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -164,11 +186,7 @@ async function fetchMedia(
       signal: controller.signal,
     });
     if (!res.ok) {
-      return {
-        ok: false,
-        reason: "download_failed",
-        detail: String(res.status),
-      };
+      return { ok: false, reason: "download_failed", detail: String(res.status) };
     }
     // Read with a hard byte cap. We can't fully trust Content-Length —
     // Twilio's media is on AWS S3-backed storage and tends to be
@@ -189,16 +207,47 @@ async function fetchMedia(
       }
       chunks.push(value);
     }
-    const buffer = Buffer.concat(chunks.map((c) => Buffer.from(c)));
-    const text = buffer.toString("utf-8");
-    return { ok: true, text };
+    return { ok: true, bytes: Buffer.concat(chunks.map((c) => Buffer.from(c))) };
   } catch (err) {
-    return {
-      ok: false,
-      reason: "download_failed",
-      detail: (err as Error).message,
-    };
+    return { ok: false, reason: "download_failed", detail: (err as Error).message };
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function fetchMedia(
+  url: string,
+  sid: string,
+  token: string,
+): Promise<FetchOk | FetchFail> {
+  const r = await fetchMediaBytesInternal(url, sid, token);
+  if (!r.ok) return r;
+  return { ok: true, text: r.bytes.toString("utf-8") };
+}
+
+// Public binary download (used by the document extractor for images / PDF /
+// docx / xlsx). Best-effort; never throws. Pulls Twilio creds from config.
+export type MediaBytesResult =
+  | { ok: true; bytes: Buffer }
+  | { ok: false; reason: "download_failed" | "download_too_large" | "missing_credentials"; detail?: string };
+
+export async function fetchMediaBytes(mediaUrl: string): Promise<MediaBytesResult> {
+  const sid = config.twilio.accountSid;
+  const token = config.twilio.authToken;
+  if (!sid || !token) return { ok: false, reason: "missing_credentials" };
+  const r = await fetchMediaBytesInternal(mediaUrl, sid, token);
+  if (!r.ok) {
+    const reason = r.reason === "download_too_large" ? "download_too_large" : "download_failed";
+    return { ok: false, reason, detail: r.detail };
+  }
+  return { ok: true, bytes: r.bytes };
+}
+
+// Is this attachment a fitness/activity file (GPX/FIT/TCX) rather than a
+// document a runner might send as their plan? Cheap url+content-type check so
+// the router can keep routing run files to the activity ingester even while
+// we're waiting for a plan.
+export function isFitnessFile(url: string, contentType?: string): boolean {
+  const f = detectFormat(url, contentType, "");
+  return f === "gpx" || f === "fit" || f === "tcx";
 }
