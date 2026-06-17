@@ -59,8 +59,8 @@ const isEntry =
   (process.argv[1] !== undefined && import.meta.url.endsWith(process.argv[1]));
 
 if (isEntry) {
-  serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
-    console.log(`marp-ai listening on http://localhost:${port}`);
+  serve({ fetch: app.fetch, hostname: "0.0.0.0", port: config.port }, ({ port }) => {
+    console.log(`marp-ai listening on http://0.0.0.0:${port}`);
   });
   // V8 deploy: dispatch reminders from inside this always-on service on
   // a 15-min interval (no external cron / second service). No-op unless
