@@ -44,6 +44,7 @@ import {
 } from "./run-retro.js";
 import { nowInZone } from "./reminders/timezone.js";
 import { sendWhatsApp } from "./twilio-send.js";
+import { deliver } from "./messaging/deliver.js";
 
 export type WeeklyEvaluationDecision = {
   adjust: boolean;
@@ -335,13 +336,8 @@ export async function runWeeklyEvaluationForAthlete(input: {
   // is recorded regardless so the loop is built + testable pre-launch.
   let sent = false;
   if (config.proactive.outboundEnabled) {
-    const [a] = await db
-      .select({ phone: athletes.phone })
-      .from(athletes)
-      .where(eq(athletes.id, athleteId))
-      .limit(1);
-    if (a?.phone) {
-      await sendWhatsApp(a.phone, message);
+    const res = await deliver(athleteId, message);
+    if (res) {
       await db
         .update(weeklyEvaluations)
         .set({ sentAt: new Date() })

@@ -369,9 +369,8 @@ export async function processIncomingMessage(
     if (lastOutboundBody === PRIVACY_NOTICE) {
       const decision = classifyConsentReply(body);
       if (decision === "decline") {
-        const phone = athleteRow.phone;
         await archiveAthlete(athleteId);
-        sendWhatsApp(phone, CONSENT_DECLINED_REPLY).catch((err) =>
+        deliver(athleteId, CONSENT_DECLINED_REPLY).catch((err) =>
           console.error("consent: declined-reply send failed", err),
         );
         return;

@@ -11,6 +11,7 @@ import { stravaAuth } from "./routes/strava-auth.js";
 import { cronReminders } from "./routes/cron-reminders.js";
 import { cal } from "./routes/cal.js";
 import { startReminderScheduler } from "./services/reminders/in-process.js";
+import { registerTelegramWebhook } from "./services/messaging/telegram-webhook-setup.js";
 
 // Fail loud at boot if any prompt file is missing or unparseable. Better
 // than discovering it when the first runner texts MARP.
@@ -63,6 +64,9 @@ const isEntry =
 if (isEntry) {
   serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
     console.log(`marp-ai listening on http://localhost:${port}`);
+    // Point Telegram at this instance (no-op unless the Telegram channel is
+    // active + configured). Best-effort, never blocks the listener.
+    void registerTelegramWebhook();
   });
   // V8 deploy: dispatch reminders from inside this always-on service on
   // a 15-min interval (no external cron / second service). No-op unless

@@ -21,6 +21,7 @@ import { db } from "../db/client.js";
 import { activities, athletes, messages } from "../db/schema.js";
 import { config } from "../config.js";
 import { sendWhatsApp } from "./twilio-send.js";
+import { deliver } from "./messaging/deliver.js";
 
 export type CheckInTextInput = {
   name?: string | null;
@@ -121,14 +122,16 @@ export async function sendPostRunCheckIn(input: {
     return { sent: false, reason: "proactive_disabled" };
   }
 
-  const { twilioMessageSid } = await sendWhatsApp(ath.phone, text);
+  const res = await deliver(input.athleteId, text);
+  if (!res) return { sent: false, reason: "send_failed" };
   // Persist the outbound so it's in conversation history and the feeling
   // reply has something to attach to.
   await db.insert(messages).values({
     athleteId: input.athleteId,
     direction: "out",
     body: text,
-    twilioMessageSid,
+    channel: res.channel,
+    twilioMessageSid: res.channel === "whatsapp" ? res.providerMessageId : null,
   });
   return { sent: true };
 }

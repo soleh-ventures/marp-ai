@@ -33,6 +33,7 @@ import { getStoredPlan, saveAthletePlan } from "./plan/storage.js";
 import { renderPlanForContext } from "./plan/types.js";
 import { nowInZone } from "./reminders/timezone.js";
 import { sendWhatsApp } from "./twilio-send.js";
+import { deliver } from "./messaging/deliver.js";
 
 const WEEK_WINDOW_DAYS = 7;
 const DOW_ORDER = [
@@ -339,7 +340,7 @@ export async function runWeeklyRetro(input: {
   let sent = false;
   if (config.proactive.outboundEnabled && ath) {
     const text = `${proposal.summary}\n\n${proposal.rationale}\n\n${proposal.decision_frame.question}`;
-    await sendWhatsApp(ath.phone, text);
+    await deliver(input.athleteId, text);
     sent = true;
   }
 
