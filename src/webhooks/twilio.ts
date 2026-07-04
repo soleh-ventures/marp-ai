@@ -37,6 +37,13 @@ function signedUrl(reqUrl: string): string {
 }
 
 twilioWebhook.post("/whatsapp", async (c) => {
+  // Kill switch: when the app is Telegram-only, WhatsApp inbound is fully
+  // disabled — no user can chat via WhatsApp. Ack with empty TwiML so Twilio
+  // stops retrying, but do NOT process, create an athlete, or reply.
+  if (config.messaging.channel === "telegram") {
+    return c.body(EMPTY_TWIML, 200, { "Content-Type": "text/xml" });
+  }
+
   // Twilio sends application/x-www-form-urlencoded. Hono parses it via parseBody.
   const body = await c.req.parseBody();
   const params: Record<string, string> = {};

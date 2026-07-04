@@ -404,3 +404,27 @@ describe("POST /webhooks/twilio/whatsapp — pre-routing batch", () => {
     expect(msgRows.find((m) => m.direction === "in")?.body).toBe("anything");
   });
 });
+
+describe("WhatsApp kill switch — Telegram-only mode", () => {
+  const original = config.messaging.channel;
+  afterEach(() => {
+    (config.messaging as { channel: string }).channel = original;
+  });
+
+  test("channel=telegram: /whatsapp acks 200 and does NOT process (no athlete, no message)", async () => {
+    (config.messaging as { channel: string }).channel = "telegram";
+    const res = await app.request(WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        MessageSid: "SMkillswitch",
+        From: "whatsapp:+15551230099",
+        Body: "hi",
+      }).toString(),
+    });
+    expect(res.status).toBe(200);
+    await pendingBackgroundWork();
+    expect(await db.select().from(messages)).toHaveLength(0);
+    expect(await db.select().from(athletes)).toHaveLength(0);
+  });
+});
