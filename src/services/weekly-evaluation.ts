@@ -19,6 +19,7 @@ import { and, desc, eq, gte, isNull } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { activities, athletes, weeklyEvaluations } from "../db/schema.js";
 import { getAthleticHistory } from "../flows/onboarding.js";
+import { getRecoveryContext } from "./athlete-readiness.js";
 import { getWeeklyEvaluationPrompt } from "../router/prompts.js";
 import { config } from "../config.js";
 import { llmCall } from "./llm-call.js";
@@ -43,6 +44,7 @@ import {
 } from "./run-retro.js";
 import { nowInZone } from "./reminders/timezone.js";
 import { sendWhatsApp } from "./twilio-send.js";
+import { deliver } from "./messaging/deliver.js";
 
 export type WeeklyEvaluationDecision = {
   adjust: boolean;
@@ -150,6 +152,7 @@ export async function buildWeeklyEvaluation(
   const rows = await loadWeekRows(athleteId);
   const flags = await openFlags(athleteId);
   const signals = computeWeekSignals(rows, flags.length > 0);
+  const recovery = await getRecoveryContext(athleteId).catch(() => null);
   const perRun = rows.map((r) => summarizeFeeling(r.feeling)).filter((s) => s !== "(no feeling)");
 
   const goalLine = resolveGoalLine(undefined, a.athleticHistory) ?? "Goal: not on file.";
@@ -181,6 +184,7 @@ export async function buildWeeklyEvaluation(
     perRun.length ? `Per-run feel: ${perRun.join(" | ")}` : "Per-run feel: (none logged)",
     streamLines.length ? `Stream shapes: ${streamLines.join(" | ")}` : "Stream shapes: (none)",
     flags.length ? `Open flags: ${flags.map((f) => `${f.kind}: ${f.body}`).join("; ")}` : "Open flags: none",
+    recovery ? recovery : "Recovery & load: (no wearable data)",
     "",
     "CURRENT PLAN (for context on what next week looks like):",
     renderPlanForContext(plan),
@@ -332,13 +336,8 @@ export async function runWeeklyEvaluationForAthlete(input: {
   // is recorded regardless so the loop is built + testable pre-launch.
   let sent = false;
   if (config.proactive.outboundEnabled) {
-    const [a] = await db
-      .select({ phone: athletes.phone })
-      .from(athletes)
-      .where(eq(athletes.id, athleteId))
-      .limit(1);
-    if (a?.phone) {
-      await sendWhatsApp(a.phone, message);
+    const res = await deliver(athleteId, message);
+    if (res) {
       await db
         .update(weeklyEvaluations)
         .set({ sentAt: new Date() })

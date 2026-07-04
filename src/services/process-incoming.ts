@@ -15,6 +15,7 @@ import { alertOperator } from "./safety/alert.js";
 import { recordSafetyEvent } from "./safety/events.js";
 import { emergencyResponse, referralPrefixFor } from "./safety/responses.js";
 import { sendWhatsApp, TwilioSendError } from "./twilio-send.js";
+import { deliver } from "./messaging/deliver.js";
 import { fireTypingIndicator } from "./typing-indicator.js";
 import {
   PIVOT_QUESTION,
@@ -368,9 +369,8 @@ export async function processIncomingMessage(
     if (lastOutboundBody === PRIVACY_NOTICE) {
       const decision = classifyConsentReply(body);
       if (decision === "decline") {
-        const phone = athleteRow.phone;
         await archiveAthlete(athleteId);
-        sendWhatsApp(phone, CONSENT_DECLINED_REPLY).catch((err) =>
+        deliver(athleteId, CONSENT_DECLINED_REPLY).catch((err) =>
           console.error("consent: declined-reply send failed", err),
         );
         return;
@@ -1000,32 +1000,36 @@ function formatDurationHuman(seconds: number): string {
 // is already persisted — no rollback needed.
 async function sendAndPersist(
   athleteId: string,
-  phone: string,
+  _phone: string,
   body: string,
 ): Promise<{ outboundMessageId: string | null }> {
-  let outboundSid: string | undefined;
+  // Route via the channel router (WhatsApp or Telegram per MESSAGING_CHANNEL).
+  // deliver() resolves the athlete's contact ids itself, so _phone is no longer
+  // needed here (kept in the signature for call-site compatibility).
+  let result: Awaited<ReturnType<typeof deliver>>;
   try {
-    const sendResult = await sendWhatsApp(phone, body);
-    outboundSid = sendResult.twilioMessageSid;
+    result = await deliver(athleteId, body);
   } catch (err) {
     if (err instanceof TwilioSendError) {
-      console.error(
-        `Twilio send failed (${err.status}): ${err.body.slice(0, 200)}`,
-      );
+      console.error(`Send failed (${err.status}): ${err.body.slice(0, 200)}`);
     } else {
-      console.error("Twilio send threw:", (err as Error).message);
+      console.error("Send threw:", (err as Error).message);
     }
     return { outboundMessageId: null };
   }
+  if (!result) return { outboundMessageId: null };
 
-  // Persist the outbound message for the next turn's memory retrieval.
+  // Persist the outbound message for the next turn's memory retrieval. The
+  // Twilio SID column only holds Twilio ids; Telegram ids live in the channel.
   const [inserted] = await db
     .insert(messages)
     .values({
       athleteId,
       direction: "out",
       body,
-      twilioMessageSid: outboundSid,
+      channel: result.channel,
+      twilioMessageSid:
+        result.channel === "whatsapp" ? result.providerMessageId : null,
     })
     .returning({ id: messages.id });
   return { outboundMessageId: inserted?.id ?? null };

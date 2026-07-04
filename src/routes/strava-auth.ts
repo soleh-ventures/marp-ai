@@ -8,6 +8,7 @@ import { buildAuthorizationUrl, exchangeCode } from "../services/strava-api.js";
 import { upsertStravaConnection } from "../services/strava-connections.js";
 import { backfillStravaHistory } from "../services/strava-backfill.js";
 import { sendWhatsApp } from "../services/twilio-send.js";
+import { deliver } from "../services/messaging/deliver.js";
 import { getAthleticHistory, runOnboardingTurn } from "../flows/onboarding.js";
 
 export const stravaAuth = new Hono();
@@ -139,7 +140,7 @@ stravaAuth.get("/callback", async (c) => {
         // Fix: don't ask the runner to "reply first" — actually ASK the first
         // onboarding question now so they answer it directly.
         const kickoff = shouldKickoff ? await buildOnboardingKickoff(athleteId) : "";
-        await sendWhatsApp(phone, "✅ Strava connected!" + tail + kickoff);
+        await deliver(athleteId, "✅ Strava connected!" + tail + kickoff);
       })().catch((err) =>
         console.error("strava callback: confirm/kickoff send failed", err),
       );

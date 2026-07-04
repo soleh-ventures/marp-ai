@@ -26,6 +26,7 @@ import { getAthleticHistory } from "../../flows/onboarding.js";
 import { getStoredPlan } from "../plan/storage.js";
 import type { DayOfWeek, PlanSession } from "../plan/types.js";
 import { sendWhatsApp } from "../twilio-send.js";
+import { deliver } from "../messaging/deliver.js";
 import { readPrefs } from "./prefs.js";
 import { buildReminderText } from "./templates.js";
 import { buildGoogleQuickAddUrl, buildIcsUrl } from "../cal/build.js";
@@ -151,7 +152,8 @@ export async function runReminderScheduler(opts: {
       nightBefore,
     });
     try {
-      await sendWhatsApp(c.phone, text);
+      const r = await deliver(c.id, text);
+      if (!r) throw new Error("no channel resolved");
       stats.sent++;
     } catch (err) {
       console.error(

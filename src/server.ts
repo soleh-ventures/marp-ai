@@ -5,11 +5,13 @@ import { ping } from "./db/client.js";
 import { rateLimit } from "./middleware/rate-limit.js";
 import { validateAllPrompts } from "./router/prompts.js";
 import { twilioWebhook } from "./webhooks/twilio.js";
+import { telegramWebhook } from "./webhooks/telegram.js";
 import { stravaWebhook } from "./webhooks/strava.js";
 import { stravaAuth } from "./routes/strava-auth.js";
 import { cronReminders } from "./routes/cron-reminders.js";
 import { cal } from "./routes/cal.js";
 import { startReminderScheduler } from "./services/reminders/in-process.js";
+import { registerTelegramWebhook } from "./services/messaging/telegram-webhook-setup.js";
 
 // Fail loud at boot if any prompt file is missing or unparseable. Better
 // than discovering it when the first runner texts MARP.
@@ -20,6 +22,7 @@ export const app = new Hono();
 app.get("/", (c) => c.text("marp-ai"));
 
 app.route("/webhooks/twilio", twilioWebhook);
+app.route("/webhooks/telegram", telegramWebhook);
 app.route("/webhooks/strava", stravaWebhook);
 
 // ET10 — rate-limit the magic-link entry point. The runner only ever
@@ -61,6 +64,9 @@ const isEntry =
 if (isEntry) {
   serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
     console.log(`marp-ai listening on http://localhost:${port}`);
+    // Point Telegram at this instance (no-op unless the Telegram channel is
+    // active + configured). Best-effort, never blocks the listener.
+    void registerTelegramWebhook();
   });
   // V8 deploy: dispatch reminders from inside this always-on service on
   // a 15-min interval (no external cron / second service). No-op unless

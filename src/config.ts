@@ -30,6 +30,28 @@ export const config = {
   nodeEnv,
   isProd,
   databaseUrl: required("DATABASE_URL"),
+  // Which channel MARP sends/receives on. "whatsapp" (Twilio, default) keeps the
+  // existing behaviour; "telegram" routes everything through the Telegram bot
+  // (free, no Twilio) while leaving the WhatsApp code in place; "both" prefers
+  // Telegram when the athlete has a chat id, else falls back to WhatsApp.
+  messaging: {
+    channel: ((): "whatsapp" | "telegram" | "both" => {
+      const c = process.env.MESSAGING_CHANNEL ?? "whatsapp";
+      return c === "telegram" || c === "both" ? c : "whatsapp";
+    })(),
+  },
+  telegram: {
+    botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",
+    // Personal-use link: when set, the first unknown Telegram chat is attached
+    // to THIS existing athlete (so your Telegram maps to your real athlete with
+    // Strava + Garmin data) instead of creating a fresh row. Unset → multi-user
+    // behaviour (a new athlete per new chat).
+    defaultAthleteId: process.env.TELEGRAM_DEFAULT_ATHLETE_ID ?? "",
+    // Optional shared-secret Telegram echoes in the X-Telegram-Bot-Api-Secret-Token
+    // header on every webhook POST (set via setWebhook). Verified when present.
+    webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET ?? "",
+    publicWebhookBase: process.env.TELEGRAM_PUBLIC_WEBHOOK_BASE ?? "",
+  },
   twilio: {
     authToken: twilioAuthToken,
     // Account SID + sandbox sender. Required for outbound replies. The

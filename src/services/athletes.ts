@@ -1,4 +1,5 @@
 import { and, eq, isNull } from "drizzle-orm";
+import { config } from "../config.js";
 import { db } from "../db/client.js";
 import { athletes } from "../db/schema.js";
 import { redactPhone } from "./phone-redact.js";
@@ -46,4 +47,48 @@ export async function findOrCreateByPhone(rawPhone: string): Promise<Athlete> {
     throw new Error(`athlete lookup failed for ${redactPhone(phone)}`);
   }
   return after[0];
+}
+
+// Telegram counterpart of findOrCreateByPhone. Resolution order:
+//   1. Already linked → return that athlete.
+//   2. TELEGRAM_DEFAULT_ATHLETE_ID set → attach this chat to that existing
+//      athlete (personal single-user: your Telegram → your real athlete row).
+//   3. Otherwise create a new athlete. The athletes table requires a phone, so
+//      a Telegram-only athlete gets a synthetic `tg:<chatId>` placeholder (the
+//      WhatsApp sender is never used for it — channel resolves to telegram).
+export async function findOrCreateByTelegramChatId(
+  chatId: string,
+): Promise<Athlete> {
+  const existing = await db
+    .select()
+    .from(athletes)
+    .where(
+      and(eq(athletes.telegramChatId, chatId), isNull(athletes.archivedAt)),
+    )
+    .limit(1);
+  if (existing[0]) return existing[0];
+
+  const linkId = config.telegram.defaultAthleteId;
+  if (linkId) {
+    const [linked] = await db
+      .update(athletes)
+      .set({ telegramChatId: chatId })
+      .where(and(eq(athletes.id, linkId), isNull(athletes.telegramChatId)))
+      .returning();
+    if (linked) return linked;
+    // Already linked to a different chat (or id not found) → re-read by id.
+    const [byId] = await db
+      .select()
+      .from(athletes)
+      .where(eq(athletes.id, linkId))
+      .limit(1);
+    if (byId) return byId;
+  }
+
+  const [inserted] = await db
+    .insert(athletes)
+    .values({ phone: `tg:${chatId}`, telegramChatId: chatId })
+    .returning();
+  if (!inserted) throw new Error(`telegram athlete create failed for ${chatId}`);
+  return inserted;
 }

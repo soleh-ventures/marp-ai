@@ -61,6 +61,10 @@ export const athletes = pgTable(
     // only across non-archived rows so an archived account can free its
     // phone number for a fresh row (phone-churn / number-recycling).
     phone: text("phone").notNull(),
+    // Telegram chat id (the other messaging channel). Nullable — an athlete
+    // reached via WhatsApp has none, and vice-versa. Unique per non-null value
+    // (partial index below) so an inbound Telegram update maps to one athlete.
+    telegramChatId: text("telegram_chat_id"),
     name: text("name"),
     locale: text("locale").notNull().default("en"),
     athleticHistory: jsonb("athletic_history"),
@@ -120,6 +124,10 @@ export const athletes = pgTable(
     uniqueIndex("athletes_phone_active_idx")
       .on(t.phone)
       .where(sql`${t.archivedAt} IS NULL`),
+    // One athlete per Telegram chat id (nulls exempt).
+    uniqueIndex("athletes_telegram_chat_idx")
+      .on(t.telegramChatId)
+      .where(sql`${t.telegramChatId} IS NOT NULL`),
   ],
 );
 
@@ -240,6 +248,9 @@ export const messages = pgTable(
     body: text("body").notNull(),
     mediaUrl: text("media_url"),
     twilioMessageSid: text("twilio_message_sid").unique(),
+    // Which channel this message went out on / came in on. Defaults to
+    // whatsapp so existing rows and the WhatsApp path are unchanged.
+    channel: text("channel").notNull().default("whatsapp"),
     receivedAt: timestamp("received_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -622,5 +633,55 @@ export const weeklyEvaluations = pgTable(
     index("weekly_evaluations_athlete_created_idx").on(t.athleteId, t.createdAt),
     // One evaluation per athlete-week.
     uniqueIndex("weekly_evaluations_week_idem_idx").on(t.athleteId, t.weekStart),
+  ],
+);
+
+// ─── garmin_wellness (personal recovery ingester — garmin-recovery-ingester) ─
+// Daily recovery signals pulled from the founder's Garmin FR245 by the Python
+// sidecar (garmin-sidecar/). Personal, single-user. `date` is Garmin's reported
+// calendar date (device timezone) stored verbatim as YYYY-MM-DD so a cron in a
+// different tz (or travel) can't drift the day. Unique (athlete_id, date) backs
+// the sidecar's ON CONFLICT upsert (keep-non-null merge). readiness_* is the
+// derived HRV-proxy score, computed once at ingest and read by the TS coach.
+export const garminWellness = pgTable(
+  "garmin_wellness",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    athleteId: uuid("athlete_id")
+      .notNull()
+      .references(() => athletes.id, { onDelete: "cascade" }),
+    date: text("date").notNull(),
+    restingHr: integer("resting_hr"),
+    vo2max: doublePrecision("vo2max"),
+    hrvOvernight: doublePrecision("hrv_overnight"), // always null on FR245
+    bodyBatteryHigh: integer("body_battery_high"),
+    bodyBatteryLow: integer("body_battery_low"),
+    bodyBatteryCharged: integer("body_battery_charged"),
+    bodyBatteryDrained: integer("body_battery_drained"),
+    bodyBatteryMorning: integer("body_battery_morning"),
+    stressAvg: integer("stress_avg"),
+    stressMax: integer("stress_max"),
+    sleepTotalS: integer("sleep_total_s"),
+    sleepDeepS: integer("sleep_deep_s"),
+    sleepLightS: integer("sleep_light_s"),
+    sleepRemS: integer("sleep_rem_s"),
+    sleepAwakeS: integer("sleep_awake_s"),
+    respSleepAvg: doublePrecision("resp_sleep_avg"),
+    respWakingAvg: doublePrecision("resp_waking_avg"),
+    respLow: doublePrecision("resp_low"),
+    respHigh: doublePrecision("resp_high"),
+    // Derived HRV proxy (percentile-of-3: RHR, morning body battery, sleep
+    // quality) vs a personal trailing baseline. Band = top/mid/bottom tertile.
+    readinessScore: integer("readiness_score"),
+    readinessBand: text("readiness_band"),
+    readinessComponents: jsonb("readiness_components"),
+    raw: jsonb("raw"),
+    source: text("source").notNull().default("garmin"),
+    ingestedAt: timestamp("ingested_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("garmin_wellness_athlete_date_idx").on(t.athleteId, t.date),
   ],
 );

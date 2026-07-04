@@ -3,6 +3,30 @@
 All notable changes to marp-ai are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are semver in `package.json`.
 
+## [0.8.0] — 2026-07-05 — Garmin recovery + readiness, and a Telegram channel
+
+### Added
+- **Garmin FR245 recovery ingester** (personal): a Python sidecar (`garmin-sidecar/`)
+  pulls sleep, stress, body battery, resting HR, respiration and VO2max via
+  python-garminconnect into a new `garmin_wellness` table (migration 0016).
+- **Readiness proxy** — the HRV Status the FR245 can't produce: percentile-of-3 of
+  resting HR, morning body battery and sleep quality vs a personal rolling baseline.
+- **Training-load analytics**: acute:chronic workload ratio (ACWR) + Foster monotony
+  from `activities`, with readiness+load wired into the conversational coach context
+  and the weekly evaluation.
+- **Telegram channel**: `MESSAGING_CHANNEL` (whatsapp|telegram|both) routes all athlete
+  messaging through the Telegram Bot API or WhatsApp; inbound `POST /webhooks/telegram`;
+  the webhook self-registers on boot. WhatsApp code is preserved, toggled by config.
+- **Proactive post-run report**: after a run is analysed, a message with the run summary
+  + coach's holistic read + recovery/load fires on the active channel (gated by
+  `PROACTIVE_OUTBOUND`).
+
+### Changed
+- All athlete-facing sends (reactive replies, post-run check-in, weekly evaluation,
+  mid-week retro, daily reminders, Strava-connect confirm, consent-declined) route
+  through a single channel router that honours `MESSAGING_CHANNEL`.
+- Schema: added `athletes.telegram_chat_id` and `messages.channel` (migration 0017).
+
 ## [0.7.0] — 2026-06-16 — Read a BYO plan from any file (vision + Office + multi-file)
 
 ### Added

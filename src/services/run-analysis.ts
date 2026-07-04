@@ -27,6 +27,7 @@ import { llmCall } from "./llm-call.js";
 import { getStoredPlan } from "./plan/storage.js";
 import { sessionDate, type Plan } from "./plan/types.js";
 import { sendPostRunCheckIn } from "./check-in.js";
+import { sendPostRunReport } from "./post-run-report.js";
 import { loadStreamSummaries, renderStreamAnnotation } from "./strava-streams.js";
 
 export type PerKm = { km: number; pace_s_per_km: number; hr: number | null };
@@ -257,5 +258,13 @@ export async function runPostRunPipeline(input: {
     await analyzeActivity(input);
   } catch (err) {
     console.error(`post-run analysis failed for ${input.activityId}: ${(err as Error).message}`);
+  }
+  // Proactive post-run report (run summary + coach's read + recovery/load),
+  // sent after analysis so the coach's read is available. Own try so a send
+  // failure never affects the analysis that already persisted.
+  try {
+    await sendPostRunReport(input);
+  } catch (err) {
+    console.error(`post-run report failed for ${input.activityId}: ${(err as Error).message}`);
   }
 }

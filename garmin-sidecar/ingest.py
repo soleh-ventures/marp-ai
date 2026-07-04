@@ -1,0 +1,143 @@
+"""
+Daily Garmin ingester. Pulls the working FR245 endpoints, upserts into
+garmin_wellness with a keep-non-null merge, then recomputes readiness from the
+merged row. Idempotent and catch-up safe: each run backfills from the last
+stored date (re-pulling the trailing few days to catch late-arriving sleep).
+
+Usage:
+    export DATABASE_URL=postgres://USER@localhost:5432/marp_ai_dev
+    python ingest.py                 # backfill to yesterday
+    python ingest.py 2026-07-01      # single day
+    python ingest.py 2026-06-20 2026-07-03   # explicit range
+"""
+
+import datetime as dt
+import os
+import sys
+import time
+
+import psycopg
+from dotenv import load_dotenv
+from psycopg.rows import dict_row
+from psycopg.types.json import Json
+
+import garmin_client as gc
+import readiness as rd
+
+load_dotenv()
+
+DATA_COLUMNS = [
+    "resting_hr", "vo2max", "hrv_overnight",
+    "body_battery_high", "body_battery_low", "body_battery_charged",
+    "body_battery_drained", "body_battery_morning",
+    "stress_avg", "stress_max",
+    "sleep_total_s", "sleep_deep_s", "sleep_light_s", "sleep_rem_s", "sleep_awake_s",
+    "resp_sleep_avg", "resp_waking_avg", "resp_low", "resp_high",
+]
+# Columns used to score readiness (kept small — the scorer only needs these).
+SCORE_COLUMNS = ["date", "resting_hr", "body_battery_morning",
+                 "sleep_total_s", "sleep_deep_s", "sleep_rem_s"]
+BACKFILL_CAP = 45  # never pull more than this many days in one run
+RE_PULL_TRAILING = 3  # re-pull last N stored days to catch late sleep data
+
+
+def resolve_athlete_id(conn) -> str:
+    forced = os.getenv("GARMIN_ATHLETE_ID")
+    if forced:
+        return forced
+    rows = conn.execute("SELECT id FROM athletes ORDER BY created_at LIMIT 2").fetchall()
+    if len(rows) == 1:
+        return str(rows[0]["id"])
+    raise SystemExit(
+        "[ingest] set GARMIN_ATHLETE_ID — DB has "
+        f"{len(rows)} athletes, can't guess which is you."
+    )
+
+
+def dates_to_pull(conn, athlete_id, argv) -> list[str]:
+    yesterday = dt.date.today() - dt.timedelta(days=1)
+    if len(argv) == 1:
+        return [argv[0]]
+    if len(argv) == 2:
+        start, end = dt.date.fromisoformat(argv[0]), dt.date.fromisoformat(argv[1])
+    else:
+        row = conn.execute(
+            "SELECT max(date) AS m FROM garmin_wellness WHERE athlete_id=%s",
+            (athlete_id,),
+        ).fetchone()
+        last = row and row["m"]
+        if last:
+            start = dt.date.fromisoformat(last) - dt.timedelta(days=RE_PULL_TRAILING)
+        else:
+            start = yesterday - dt.timedelta(days=29)  # first run: 30-day baseline
+        end = yesterday
+    start = max(start, end - dt.timedelta(days=BACKFILL_CAP - 1))
+    n = (end - start).days + 1
+    return [(start + dt.timedelta(days=i)).isoformat() for i in range(max(n, 0))]
+
+
+def upsert_day(conn, athlete_id: str, row: dict) -> None:
+    """Insert or keep-non-null merge. Never clobbers a good value with a later
+    null (partial-day pulls); raw always takes the newest."""
+    cols = ["athlete_id"] + DATA_COLUMNS + ["raw", "source", "date"]
+    values = {
+        "athlete_id": athlete_id,
+        "date": row["date"],
+        "source": row.get("source", "garmin"),
+        "raw": Json(row.get("raw")),
+        **{c: row.get(c) for c in DATA_COLUMNS},
+    }
+    placeholders = ", ".join(f"%({c})s" for c in cols)
+    merge = ", ".join(f"{c} = COALESCE(EXCLUDED.{c}, garmin_wellness.{c})" for c in DATA_COLUMNS)
+    conn.execute(
+        f"INSERT INTO garmin_wellness ({', '.join(cols)}) VALUES ({placeholders}) "
+        f"ON CONFLICT (athlete_id, date) DO UPDATE SET {merge}, "
+        f"raw = EXCLUDED.raw, ingested_at = now()",
+        values,
+    )
+
+
+def rescore_day(conn, athlete_id: str, date: str) -> dict:
+    """Recompute readiness for `date` from the merged row + prior history."""
+    cols = ", ".join(SCORE_COLUMNS)
+    today = conn.execute(
+        f"SELECT {cols} FROM garmin_wellness WHERE athlete_id=%s AND date=%s",
+        (athlete_id, date),
+    ).fetchone()
+    history = conn.execute(
+        f"SELECT {cols} FROM garmin_wellness WHERE athlete_id=%s AND date < %s ORDER BY date",
+        (athlete_id, date),
+    ).fetchall()
+    result = rd.compute_readiness(dict(today), [dict(h) for h in history])
+    conn.execute(
+        "UPDATE garmin_wellness SET readiness_score=%s, readiness_band=%s, "
+        "readiness_components=%s WHERE athlete_id=%s AND date=%s",
+        (result["score"], result["band"], Json(result["components"]), athlete_id, date),
+    )
+    return result
+
+
+def main() -> None:
+    db = os.getenv("DATABASE_URL")
+    if not db:
+        raise SystemExit("[ingest] DATABASE_URL not set")
+    g = gc.connect()
+    with psycopg.connect(db, row_factory=dict_row, autocommit=True) as conn:
+        athlete_id = resolve_athlete_id(conn)
+        dates = dates_to_pull(conn, athlete_id, sys.argv[1:])
+        print(f"[ingest] athlete={athlete_id} pulling {len(dates)} day(s): "
+              f"{dates[0] if dates else '-'}..{dates[-1] if dates else '-'}")
+        for date in dates:
+            row = gc.fetch_day(g, date)
+            upsert_day(conn, athlete_id, row)
+            r = rescore_day(conn, athlete_id, date)
+            print(f"  {date}: rhr={row.get('resting_hr')} "
+                  f"bb_morning={row.get('body_battery_morning')} "
+                  f"sleep_h={round((row.get('sleep_total_s') or 0)/3600,1)} "
+                  f"-> readiness={r['score']} ({r['band']})")
+            time.sleep(1.2)  # be gentle with Garmin's rate limiter
+    print("[ingest] done")
+
+
+if __name__ == "__main__":
+    main()
