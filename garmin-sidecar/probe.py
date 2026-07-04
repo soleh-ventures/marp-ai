@@ -21,54 +21,13 @@ the token in tokens/ is reused and you won't need the password again.
 
 import datetime as dt
 import json
-import os
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
+from garmin_client import connect  # shared auth + display-name fix (DRY)
 from garminconnect import Garmin
 
-load_dotenv()
-
-TOKEN_STORE = os.getenv("GARMIN_TOKEN_STORE", "./tokens")
 OUT_DIR = Path("out")
-
-
-def connect() -> Garmin:
-    """Resume from a cached token if present, else log in with email/password
-    (handling MFA once) and persist the token for next time.
-
-    garminconnect 0.3.x: login(tokenstore) both LOADS existing tokens and, on a
-    fresh non-MFA login, auto-dumps them. The MFA branch returns early before
-    that dump, so after resume_login we persist explicitly via client.dump().
-    """
-    token_dir = Path(TOKEN_STORE)
-
-    # 1) Resume from a cached token (no password needed).
-    if token_dir.exists() and any(token_dir.iterdir()):
-        try:
-            g = Garmin()
-            g.login(str(token_dir))
-            print(f"[auth] resumed session from {token_dir}")
-            return g
-        except Exception as e:  # token expired/invalid -> fall through to fresh login
-            print(f"[auth] cached token unusable ({e}); doing a fresh login")
-
-    # 2) Fresh login with email/password (+ MFA once).
-    email = os.getenv("GARMIN_EMAIL")
-    password = os.getenv("GARMIN_PASSWORD")
-    if not email or not password:
-        sys.exit("[auth] no cached token and GARMIN_EMAIL/GARMIN_PASSWORD not set in .env")
-
-    token_dir.mkdir(parents=True, exist_ok=True)
-    g = Garmin(email=email, password=password, return_on_mfa=True)
-    result1, result2 = g.login(str(token_dir))  # auto-dumps on non-MFA success
-    if result1 == "needs_mfa":
-        code = input("[auth] enter the Garmin MFA code sent to you: ").strip()
-        g.resume_login(result2, code)
-        g.client.dump(str(token_dir))  # resume_login does not persist; do it here
-    print(f"[auth] logged in; token cached to {token_dir} (reused next time)")
-    return g
 
 
 # (label, callable). Each is tried independently so one 404 on the FR245
