@@ -120,6 +120,13 @@
       "when": 1783200690280,
       "tag": "0016_dark_thunderball",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1783203621619,
+      "tag": "0017_woozy_earthquake",
+      "breakpoints": true
     }
   ]
 }

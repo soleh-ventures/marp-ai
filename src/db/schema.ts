@@ -61,6 +61,10 @@ export const athletes = pgTable(
     // only across non-archived rows so an archived account can free its
     // phone number for a fresh row (phone-churn / number-recycling).
     phone: text("phone").notNull(),
+    // Telegram chat id (the other messaging channel). Nullable — an athlete
+    // reached via WhatsApp has none, and vice-versa. Unique per non-null value
+    // (partial index below) so an inbound Telegram update maps to one athlete.
+    telegramChatId: text("telegram_chat_id"),
     name: text("name"),
     locale: text("locale").notNull().default("en"),
     athleticHistory: jsonb("athletic_history"),
@@ -120,6 +124,10 @@ export const athletes = pgTable(
     uniqueIndex("athletes_phone_active_idx")
       .on(t.phone)
       .where(sql`${t.archivedAt} IS NULL`),
+    // One athlete per Telegram chat id (nulls exempt).
+    uniqueIndex("athletes_telegram_chat_idx")
+      .on(t.telegramChatId)
+      .where(sql`${t.telegramChatId} IS NOT NULL`),
   ],
 );
 
@@ -240,6 +248,9 @@ export const messages = pgTable(
     body: text("body").notNull(),
     mediaUrl: text("media_url"),
     twilioMessageSid: text("twilio_message_sid").unique(),
+    // Which channel this message went out on / came in on. Defaults to
+    // whatsapp so existing rows and the WhatsApp path are unchanged.
+    channel: text("channel").notNull().default("whatsapp"),
     receivedAt: timestamp("received_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

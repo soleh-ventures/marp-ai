@@ -5,6 +5,7 @@ import { ping } from "./db/client.js";
 import { rateLimit } from "./middleware/rate-limit.js";
 import { validateAllPrompts } from "./router/prompts.js";
 import { twilioWebhook } from "./webhooks/twilio.js";
+import { telegramWebhook } from "./webhooks/telegram.js";
 import { stravaWebhook } from "./webhooks/strava.js";
 import { stravaAuth } from "./routes/strava-auth.js";
 import { cronReminders } from "./routes/cron-reminders.js";
@@ -20,6 +21,7 @@ export const app = new Hono();
 app.get("/", (c) => c.text("marp-ai"));
 
 app.route("/webhooks/twilio", twilioWebhook);
+app.route("/webhooks/telegram", telegramWebhook);
 app.route("/webhooks/strava", stravaWebhook);
 
 // ET10 — rate-limit the magic-link entry point. The runner only ever
