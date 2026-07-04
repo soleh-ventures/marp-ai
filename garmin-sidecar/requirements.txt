@@ -1,0 +1,4 @@
+# Personal Garmin recovery ingester (sidecar). Python, decoupled from the Bun app.
+garminconnect>=0.2.25   # unofficial Garmin Connect client (uses your own login)
+python-dotenv>=1.0.1    # load .env for GARMIN_* and DATABASE_URL
+psycopg[binary]>=3.2.0  # write daily_wellness into MARP's Postgres (ingester step)

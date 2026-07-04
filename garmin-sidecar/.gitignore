@@ -1,0 +1,9 @@
+# Secrets and local state — NEVER commit these.
+.env
+.venv/
+__pycache__/
+*.pyc
+# Garmin auth tokens (minted from your login; treat like a password).
+tokens/
+# Probe output dumps (may contain personal health data).
+out/
