@@ -46,7 +46,22 @@ def connect() -> Garmin:
     and user-summary endpoints. Setting it explicitly unblocks them."""
     token_dir = Path(TOKEN_STORE)
     g = None
-    if token_dir.exists() and any(token_dir.iterdir()):
+
+    # Headless/cron auth: a serialized garth token string (mint it once locally
+    # with `python mint_token.py`, then set GARMIN_TOKEN_STRING on the cron).
+    # Strings >512 chars are loaded directly by login(); garth auto-refreshes
+    # the short-lived access token from the long-lived one, so this survives
+    # ~a year with no interactive MFA.
+    token_str = os.getenv("GARMIN_TOKEN_STRING")
+    if token_str and len(token_str) > 512:
+        try:
+            g = Garmin()
+            g.login(token_str)
+        except Exception as e:
+            print(f"[auth] GARMIN_TOKEN_STRING unusable ({e}); trying other methods")
+            g = None
+
+    if g is None and token_dir.exists() and any(token_dir.iterdir()):
         try:
             g = Garmin()
             g.login(str(token_dir))
