@@ -9,6 +9,7 @@ import {
   stravaConnections,
 } from "../db/schema.js";
 import { getAthleticHistory } from "../flows/onboarding.js";
+import { getRecoveryContext } from "../services/athlete-readiness.js";
 import { getStoredPlan } from "../services/plan/storage.js";
 import { renderPlanForContext, type Plan } from "../services/plan/types.js";
 import {
@@ -209,6 +210,10 @@ export async function getMemoryContext(
   // instead of dumping raw JSON the LLM has to do date math against.
   const plan = getStoredPlan(getAthleticHistory(athlete.athleticHistory));
 
+  // Garmin recovery + training-load line (best-effort; null when no wearable
+  // data / activities so it never injects an empty header or breaks the reply).
+  const recovery = await getRecoveryContext(athleteId).catch(() => null);
+
   return {
     text: formatContext({
       name: athlete.name,
@@ -221,6 +226,7 @@ export async function getMemoryContext(
       messages: recentChrono,
       activities: activityRows,
       stravaStatus,
+      recovery,
       zonedToday,
       plan,
     }),
@@ -247,6 +253,8 @@ export type ActivityRow = {
 type FormatInput = {
   name: string | null;
   locale: string;
+  // Garmin recovery + training-load line (pre-formatted; see athlete-readiness).
+  recovery?: string | null;
   // KER-78: the runner's HOME city (location SSOT). Surfaced as part of the
   // ground-truth line so the LLM has an authoritative city to anchor on and
   // stops grabbing a stale one from the message log.
@@ -490,6 +498,11 @@ export function formatContext(input: FormatInput): string {
       if (adherence) parts.push(adherence);
     }
   }
+
+  // Recovery + training-load line (Garmin wearable). Placed after the plan so
+  // the coach weighs "how recovered am I / am I ramping too fast" against what
+  // this week prescribes.
+  if (input.recovery) parts.push(input.recovery);
 
   if (input.stravaStatus) {
     const hasActivities = (input.activities?.length ?? 0) > 0;
