@@ -185,6 +185,35 @@ describe("callback taps — pending_choice dedup", () => {
     expect(edit).toBeDefined();
     expect(edit!.body.message_id).toBe(999);
   });
+
+  // Regression: a tap on a pending_choice-GATED question (calib/caloffer/
+  // gcaldis) must still route after the webhook clears pending_choice. The
+  // webhook passes answeredChoiceId so the branch matches. Before the fix the
+  // branch read the (already-cleared) pending_choice and fell through to the
+  // LLM router — the "Set my style / Later loads forever" bug.
+  test("gated tap (calib 'Set my style') routes even though the webhook cleared pending_choice", async () => {
+    const a = await insertAthlete({
+      prefs_state: undefined,
+      pending_choice: {
+        question_id: "calib",
+        tg_message_id: "999",
+        asked_at: new Date().toISOString(),
+      },
+      coach_prefs_offer_at: new Date().toISOString(),
+    });
+    await post(callbackUpdate("cb-calib", "v1:calib:set_style"));
+    await pendingTelegramWork();
+    const [row] = await db
+      .select({ athleticHistory: athletes.athleticHistory })
+      .from(athletes)
+      .where(eq(athletes.id, a.id));
+    const history = row!.athleticHistory as Record<string, unknown>;
+    // The calib branch fired: it moved the athlete into the coach question.
+    // (Set BEFORE the reply send, so it survives the test's WhatsApp-routed
+    // reply that can't deliver.)
+    expect(history.prefs_state).toBe("coach");
+    expect(history.pending_choice).toBeUndefined();
+  });
 });
 
 describe("per-athlete serialization", () => {

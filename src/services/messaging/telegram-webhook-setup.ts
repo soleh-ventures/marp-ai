@@ -24,8 +24,10 @@ export async function registerTelegramWebhook(): Promise<void> {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         url,
-        // Only send us message updates (not edits/reactions/etc).
-        allowed_updates: ["message"],
+        // Text messages AND button taps. callback_query is REQUIRED for the
+        // inline-keyboard UX — without it Telegram silently drops every tap
+        // and the button spins forever (it never reaches our webhook).
+        allowed_updates: ["message", "callback_query"],
         ...(config.telegram.webhookSecret
           ? { secret_token: config.telegram.webhookSecret }
           : {}),
