@@ -60,6 +60,14 @@ morning body battery, and sleep quality vs your own trailing baseline. Needs
 14 days before it scores; band = green/amber/red by tertile. Computed once at
 ingest and stored; the TS coach reads the stored value.
 
+**Activities.** After the wellness loop, `ingest.py` also pulls your recent
+Garmin activities (`fetch_activities`) into MARP's shared `activities` table
+with `source='garmin'` — the same shape as the Strava/GPX paths, deduped on
+`(source, source_id)`. This is the interim ingestion path after Strava's API
+paywall: the coach reads `activities` source-agnostically, so your runs are
+analyzable and feed the plan generator with no further wiring. `ADD VALUE
+'garmin'` on `activity_source` (migration 0019) must be applied first.
+
 ## Tests
 
 ```bash

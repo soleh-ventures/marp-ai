@@ -6,6 +6,7 @@ per-day normalization into the garmin_wellness column shape.
 Personal use only — own account, own data.
 """
 
+import datetime as dt
 import os
 import random
 import time
@@ -172,3 +173,81 @@ WELLNESS_COLUMNS = [
     "readiness_score", "readiness_band", "readiness_components",
     "raw", "source",
 ]
+
+
+# ── Activities (runs/rides/etc) ──────────────────────────────────────────
+# The recovery ingester's sibling: pull recent Garmin ACTIVITIES and normalize
+# them into MARP's `activities` metrics shape (same as the Strava path), so the
+# coach can analyze workouts and plan from them after Strava's API paywall.
+
+# Garmin activityType.typeKey → MARP discipline vocabulary. Unknown → "other".
+_GARMIN_DISCIPLINE = {
+    "running": "run", "trail_running": "run", "treadmill_running": "run",
+    "track_running": "run", "virtual_run": "run", "obstacle_run": "run",
+    "cycling": "ride", "road_biking": "ride", "mountain_biking": "ride",
+    "indoor_cycling": "ride", "virtual_ride": "ride", "gravel_cycling": "ride",
+    "lap_swimming": "swim", "open_water_swimming": "swim",
+    "walking": "walk", "casual_walking": "walk", "speed_walking": "walk",
+    "hiking": "hike",
+    "strength_training": "strength", "indoor_cardio": "cross",
+    "yoga": "mobility", "pilates": "mobility", "elliptical": "cross",
+}
+_LONG_RUN_MIN_DISTANCE_M = 16_000
+
+
+def _map_discipline(type_key: str | None) -> str:
+    return _GARMIN_DISCIPLINE.get((type_key or "").lower(), "other")
+
+
+def _gmt_to_iso(s: str | None) -> str | None:
+    """Garmin's startTimeGMT ('2026-07-04 20:30:00', UTC) → ISO8601 UTC."""
+    if not s:
+        return None
+    try:
+        d = dt.datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+        return d.replace(tzinfo=dt.timezone.utc).isoformat()
+    except (ValueError, TypeError):
+        return None
+
+
+def fetch_activities(g: Garmin, limit: int = 30) -> list[dict]:
+    """Most recent `limit` activities, normalized to MARP's shape. Skips any
+    row missing an id or start time; one bad activity never kills the batch."""
+    try:
+        raw = _retry(lambda: g.get_activities(0, limit), what="get_activities")
+    except Exception as e:  # noqa: BLE001
+        print(f"[activities] fetch failed: {type(e).__name__}: {str(e)[:80]}")
+        return []
+    out: list[dict] = []
+    for a in raw or []:
+        aid = a.get("activityId")
+        started = _gmt_to_iso(a.get("startTimeGMT"))
+        if aid is None or started is None:
+            continue
+        type_key = (a.get("activityType") or {}).get("typeKey")
+        discipline = _map_discipline(type_key)
+        distance_m = _num(a.get("distance"))
+        avg_speed = _num(a.get("averageSpeed"))  # m/s
+        pace = round(1000 / avg_speed) if avg_speed and avg_speed > 0 else None
+        elev = _num(a.get("elevationGain"))
+        cal = _num(a.get("calories"))
+        out.append({
+            "source_id": str(aid),
+            "discipline": discipline,
+            "started_at": started,
+            "duration_s": int(_num(a.get("duration")) or 0),
+            "long_run": discipline == "run"
+            and (distance_m or 0) >= _LONG_RUN_MIN_DISTANCE_M,
+            "metrics": {
+                "name": a.get("activityName"),
+                "avg_hr": _num(a.get("averageHR")),
+                "max_hr": _num(a.get("maxHR")),
+                "calories": round(cal) if cal is not None else None,
+                "distance_m": distance_m,
+                "avg_cadence": _num(a.get("averageRunningCadenceInStepsPerMinute")),
+                "description": None,
+                "elev_gain_m": round(elev) if elev is not None else None,
+                "avg_pace_s_per_km": pace,
+            },
+        })
+    return out
