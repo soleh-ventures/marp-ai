@@ -130,13 +130,44 @@ function feedDescription(s: PlanSession, week: PlanWeek): string {
   return lines.join("\n");
 }
 
+// One spec per non-rest session — the shared shape behind the ICS feed AND
+// the Google Calendar sync (PR 4), so titles/descriptions/times can't drift
+// between the two surfaces.
+export type PlanEventSpec = {
+  uid: string; // stable across resyncs — the upsert key on both surfaces
+  date: string; // YYYY-MM-DD
+  timeLocal: string; // HH:MM wall-clock in the athlete's day
+  durationMin: number;
+  title: string;
+  description: string;
+};
+
+export function planEventSpecs(plan: Plan, time: FeedTimeSource): PlanEventSpec[] {
+  const timeLocal = resolveSessionTime(time);
+  const specs: PlanEventSpec[] = [];
+  for (const week of plan.weeks) {
+    for (const s of week.sessions) {
+      if (s.type === "rest") continue;
+      const date = sessionDate(plan.start_date, week.index, s.day_of_week);
+      specs.push({
+        uid: `${date}-${s.type}@marp-plan`,
+        date,
+        timeLocal,
+        durationMin: s.duration_min ?? 60,
+        title: feedTitle(s, week),
+        description: feedDescription(s, week),
+      });
+    }
+  }
+  return specs;
+}
+
 // Build the whole-plan VCALENDAR. `now` injectable for golden-file tests.
 export function buildPlanFeed(
   plan: Plan,
   time: FeedTimeSource,
   opts: { now?: Date } = {},
 ): string {
-  const timeLocal = resolveSessionTime(time);
   const now = opts.now ?? new Date();
   const p = (n: number) => n.toString().padStart(2, "0");
   const dtstamp =
@@ -153,22 +184,17 @@ export function buildPlanFeed(
     "REFRESH-INTERVAL;VALUE=DURATION:PT12H",
   ];
 
-  for (const week of plan.weeks) {
-    for (const s of week.sessions) {
-      if (s.type === "rest") continue;
-      const date = sessionDate(plan.start_date, week.index, s.day_of_week);
-      const durationMin = s.duration_min ?? 60;
-      lines.push(
-        "BEGIN:VEVENT",
-        `UID:${esc(`${date}-${s.type}@marp-plan`)}`,
-        `DTSTAMP:${dtstamp}`,
-        `DTSTART:${icsDateTime(date, timeLocal)}`,
-        `DTEND:${icsDateTime(date, timeLocal, durationMin)}`,
-        `SUMMARY:${esc(feedTitle(s, week))}`,
-        `DESCRIPTION:${esc(feedDescription(s, week))}`,
-        "END:VEVENT",
-      );
-    }
+  for (const spec of planEventSpecs(plan, time)) {
+    lines.push(
+      "BEGIN:VEVENT",
+      `UID:${esc(spec.uid)}`,
+      `DTSTAMP:${dtstamp}`,
+      `DTSTART:${icsDateTime(spec.date, spec.timeLocal)}`,
+      `DTEND:${icsDateTime(spec.date, spec.timeLocal, spec.durationMin)}`,
+      `SUMMARY:${esc(spec.title)}`,
+      `DESCRIPTION:${esc(spec.description)}`,
+      "END:VEVENT",
+    );
   }
 
   lines.push("END:VCALENDAR", "");

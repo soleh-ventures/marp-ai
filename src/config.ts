@@ -107,6 +107,15 @@ export const config = {
     // unit tests that don't touch Strava don't have to set it.
     tokenEncryptionKey: process.env.STRAVA_TOKEN_ENCRYPTION_KEY ?? "",
   },
+  google: {
+    // OAuth client for Google Calendar (calendar.events sensitive scope).
+    // Cloud Console setup: Web application client, redirect URI =
+    // <public base>/auth/google/callback. Publishing status "In production"
+    // (unverified is fine <100 users — one warning screen) so refresh
+    // tokens don't expire weekly like Testing mode's do.
+    clientId: process.env.GOOGLE_CLIENT_ID ?? "",
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
+  },
   magicLink: {
     // Dedicated secret — NOT reused from TWILIO_AUTH_TOKEN per eng A3.
     secret: process.env.MAGIC_LINK_SECRET ?? "",
