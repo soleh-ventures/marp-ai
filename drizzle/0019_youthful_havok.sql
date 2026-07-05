@@ -1,0 +1,1 @@
+ALTER TYPE "public"."activity_source" ADD VALUE 'garmin';

@@ -117,6 +117,42 @@ def rescore_day(conn, athlete_id: str, date: str) -> dict:
     return result
 
 
+# How many recent activities to pull each run. Dedup on (source, source_id)
+# makes re-pulls free, so this just needs to cover the gap since the last run
+# (daily cron → a handful) with headroom for a first-run backfill.
+ACTIVITY_PULL_LIMIT = 30
+
+
+def upsert_activity(conn, athlete_id: str, act: dict) -> bool:
+    """Insert one Garmin activity; ON CONFLICT (source, source_id) DO NOTHING.
+    Returns True if a new row landed."""
+    cur = conn.execute(
+        "INSERT INTO activities "
+        "(athlete_id, discipline, source, started_at, duration_s, metrics, "
+        " source_id, long_run) "
+        "VALUES (%s, %s, 'garmin', %s, %s, %s, %s, %s) "
+        "ON CONFLICT (source, source_id) DO NOTHING",
+        (athlete_id, act["discipline"], act["started_at"], act["duration_s"],
+         Json(act["metrics"]), act["source_id"], act["long_run"]),
+    )
+    return cur.rowcount > 0
+
+
+def ingest_activities(conn, g, athlete_id: str) -> None:
+    """Pull recent Garmin activities into the shared activities table so the
+    coach can analyze them + plan from them (source-agnostic downstream)."""
+    acts = gc.fetch_activities(g, ACTIVITY_PULL_LIMIT)
+    new = 0
+    for a in acts:
+        try:
+            if upsert_activity(conn, athlete_id, a):
+                new += 1
+        except Exception as e:  # noqa: BLE001 — one bad row never kills the batch
+            print(f"[activities] upsert failed for {a.get('source_id')}: "
+                  f"{type(e).__name__}: {str(e)[:80]}")
+    print(f"[activities] pulled {len(acts)}, {new} new")
+
+
 def main() -> None:
     db = os.getenv("DATABASE_URL")
     if not db:
@@ -136,6 +172,12 @@ def main() -> None:
                   f"sleep_h={round((row.get('sleep_total_s') or 0)/3600,1)} "
                   f"-> readiness={r['score']} ({r['band']})")
             time.sleep(1.2)  # be gentle with Garmin's rate limiter
+        # Activities: independent of the wellness day loop and best-effort —
+        # a failure here must not lose the recovery data we just wrote.
+        try:
+            ingest_activities(conn, g, athlete_id)
+        except Exception as e:  # noqa: BLE001
+            print(f"[activities] block failed: {type(e).__name__}: {str(e)[:80]}")
     print("[ingest] done")
 
 

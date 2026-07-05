@@ -27,6 +27,10 @@ export const activitySourceEnum = pgEnum("activity_source", [
   "strava",
   "fit",
   "gpx",
+  // Runs pulled from Garmin by the python-garminconnect recovery sidecar
+  // (garmin-sidecar/ingest.py) — the interim ingestion path after Strava's
+  // API paywall. Same activities table + metrics shape as the others.
+  "garmin",
 ]);
 
 export const activeFlagKindEnum = pgEnum("active_flag_kind", [
