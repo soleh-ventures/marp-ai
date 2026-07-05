@@ -38,7 +38,10 @@ async function evaluateFixture(fixture: PlanFixture): Promise<FixtureResult> {
     model: config.llm.domainModel,
     system: getPlanGeneratorPrompt(),
     user: userPayload,
-    maxTokens: 4000,
+    // Must match production (plan/generator.ts:63). This sat at 4000 while
+    // prod ran 16000 — the longer v0.9.0 plans truncated mid-JSON and every
+    // fixture failed on "Expected ']'" while prod was fine.
+    maxTokens: 16000,
     temperature: 0.4,
     cacheSystem: true,
   });
