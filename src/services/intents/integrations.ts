@@ -2,9 +2,9 @@
 // founder-only today, so athlete interest becomes a real demand signal for
 // the source-agnostic ingestion track instead of a placebo button).
 
-import { eq } from "drizzle-orm";
+import { and, desc, eq, gte } from "drizzle-orm";
 import { db } from "../../db/client.js";
-import { athletes } from "../../db/schema.js";
+import { athletes, garminWellness } from "../../db/schema.js";
 import { getAthleticHistory } from "../../flows/onboarding.js";
 
 const GARMIN_PATTERNS = [
@@ -27,7 +27,32 @@ export const GARMIN_ALREADY_WAITLISTED_REPLY =
   "You're already on the Garmin waitlist — I'll ping you the day it's live. " +
   "GPX files and check-ins keep working meanwhile.";
 
-// Record the tap/ask. Returns the right reply either way.
+export const GARMIN_ALREADY_CONNECTED_REPLY =
+  "⌚ Your Garmin's already connected — I'm reading your sleep, resting HR, " +
+  "body battery and readiness every morning, and I factor it into how hard I " +
+  "push you. Nothing more to do.";
+
+// An athlete counts as "Garmin connected" when the recovery sidecar has
+// landed recent wellness rows for them. Cheap single-row existence check.
+async function hasRecentGarminData(athleteId: string): Promise<boolean> {
+  const since = new Date(Date.now() - 21 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
+  const [row] = await db
+    .select({ date: garminWellness.date })
+    .from(garminWellness)
+    .where(
+      and(eq(garminWellness.athleteId, athleteId), gte(garminWellness.date, since)),
+    )
+    .orderBy(desc(garminWellness.date))
+    .limit(1);
+  return Boolean(row);
+}
+
+// Record the tap/ask. Returns the right reply:
+//   - data already flowing (founder via the sidecar) → "already connected"
+//   - already waitlisted → the reminder
+//   - otherwise → waitlist + stamp the demand signal
 export async function recordGarminInterest(athleteId: string): Promise<string> {
   const [row] = await db
     .select({ athleticHistory: athletes.athleticHistory })
@@ -36,6 +61,21 @@ export async function recordGarminInterest(athleteId: string): Promise<string> {
     .limit(1);
   if (!row) return GARMIN_WAITLIST_REPLY;
   const history = getAthleticHistory(row.athleticHistory);
+
+  // Connected-check comes FIRST: an athlete whose watch data is already
+  // ingesting must never be told they're on a waitlist. Self-heals a stale
+  // garmin_waitlist_at flag if the sidecar started flowing later.
+  if (await hasRecentGarminData(athleteId)) {
+    if (typeof history.garmin_waitlist_at === "string") {
+      const { garmin_waitlist_at: _drop, ...rest } = history;
+      await db
+        .update(athletes)
+        .set({ athleticHistory: rest })
+        .where(eq(athletes.id, athleteId));
+    }
+    return GARMIN_ALREADY_CONNECTED_REPLY;
+  }
+
   if (typeof history.garmin_waitlist_at === "string") {
     return GARMIN_ALREADY_WAITLISTED_REPLY;
   }
