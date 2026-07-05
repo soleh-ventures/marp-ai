@@ -1,6 +1,6 @@
 {
   "name": "marp-ai",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -21,7 +21,8 @@
     "eval:m1": "bun run src/scripts/eval-m1.ts",
     "eval:safety": "bun run src/scripts/eval-safety.ts",
     "eval:grounding": "bun run src/scripts/eval-grounding-poison.ts",
-    "reminders:run": "bun run src/scripts/run-reminders.ts"
+    "reminders:run": "bun run src/scripts/run-reminders.ts",
+    "eval:persona": "bun run src/scripts/eval-persona.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.97.1",
