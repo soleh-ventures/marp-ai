@@ -6,6 +6,12 @@ per-day normalization into the garmin_wellness column shape.
 Personal use only — own account, own data.
 """
 
+# Make all annotations lazy strings (PEP 563) so `str | None` and friends
+# never get evaluated at runtime — the Railway/nixpacks container runs a
+# Python < 3.10 where PEP 604 union syntax in an annotation would crash the
+# whole module at import (which took the wellness ingest down with it).
+from __future__ import annotations
+
 import datetime as dt
 import os
 import random

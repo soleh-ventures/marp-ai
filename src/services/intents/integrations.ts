@@ -7,15 +7,20 @@ import { db } from "../../db/client.js";
 import { athletes, garminWellness } from "../../db/schema.js";
 import { getAthleticHistory } from "../../flows/onboarding.js";
 
-const GARMIN_PATTERNS = [
-  /\bgarmin\b/i,
-  /connect\b.{0,20}\bwatch\b/i,
+// ONLY explicit connect/link/setup intent — NOT any mention of "garmin".
+// A bare /garmin/ match hijacked "pull my garmin data" / "analyze my garmin
+// run" with the canned connect reply, so those never reached the coach (who
+// has the athlete's activities + readiness in context and can actually answer).
+const GARMIN_CONNECT_PATTERNS = [
+  /\b(connect|link|set\s?up|pair|hook\s?up|integrate|add)\b.{0,20}\bgarmin\b/i,
+  /\bgarmin\b.{0,15}\b(connect|link|set\s?up|setup|pair|integration)\b/i,
+  /\bconnect\b.{0,20}\bwatch\b/i,
 ];
 
 export function looksLikeGarminConnect(message: string): boolean {
   const t = message.trim();
   if (t.length > 80) return false;
-  return GARMIN_PATTERNS.some((re) => re.test(t));
+  return GARMIN_CONNECT_PATTERNS.some((re) => re.test(t));
 }
 
 export const GARMIN_WAITLIST_REPLY =
