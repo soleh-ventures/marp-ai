@@ -277,9 +277,15 @@ export async function processIncomingMessage(
   // crisis message, and canonical words like "hard"/"aggressive" must never
   // become spurious sentiment flags (eng amendment 3). Branch logic is
   // unchanged — one pipeline for taps and typing.
-  opts?: { synthetic?: boolean },
+  // answeredChoiceId: for a button tap, the webhook clears pending_choice
+  // (double-tap idempotency + keyboard retire) BEFORE we run, so the branches
+  // that gate on the pending question would miss it. The webhook passes the
+  // tapped question id here so those branches still match. Typed answers leave
+  // it undefined and match on pending_choice as before.
+  opts?: { synthetic?: boolean; answeredChoiceId?: string },
 ): Promise<void> {
   const synthetic = opts?.synthetic === true;
+  const answeredChoiceId = opts?.answeredChoiceId;
   // The full attachment list — prefer the explicit array; fall back to the
   // single legacy pair so existing callers keep working.
   const allMedia: MediaItem[] =
@@ -983,7 +989,8 @@ export async function processIncomingMessage(
       replyText = REMINDER_CAPTURED_REPLY(reminderReq.time_local, reminderReq.timing);
     }
   } else if (
-    getPendingChoice(history)?.question_id === "caloffer" &&
+    (answeredChoiceId === "caloffer" ||
+      getPendingChoice(history)?.question_id === "caloffer") &&
     matchFreeText(Q_CAL_OFFER, body) !== null
   ) {
     // Post-plan calendar offer answered.
@@ -997,7 +1004,8 @@ export async function processIncomingMessage(
       replyText = CAL_LATER_REPLY + REMINDER_PROMPT;
     }
   } else if (
-    getPendingChoice(history)?.question_id === "gcaldis" &&
+    (answeredChoiceId === "gcaldis" ||
+      getPendingChoice(history)?.question_id === "gcaldis") &&
     matchFreeText(Q_GCAL_DISCONNECT, body) !== null
   ) {
     // Google Calendar disconnect confirmed — keep or delete MARP's events.
@@ -1031,7 +1039,8 @@ export async function processIncomingMessage(
       (await buildCalendarExportReply(athleteId, history)) ??
       CAL_NOT_CONFIGURED_REPLY;
   } else if (
-    getPendingChoice(history)?.question_id === "calib" &&
+    (answeredChoiceId === "calib" ||
+      getPendingChoice(history)?.question_id === "calib") &&
     matchFreeText(Q_CALIB, body) !== null
   ) {
     // Existing athlete answering the quick-calibration offer.

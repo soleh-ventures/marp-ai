@@ -118,7 +118,10 @@ telegramWebhook.post("/", async (c) => {
         null,
         null,
         [],
-        { synthetic: true },
+        // answeredChoiceId: we just cleared pending_choice above, so the
+        // gated branches (calib/caloffer/gcaldis) need the tapped question id
+        // to match — pending_choice is already gone.
+        { synthetic: true, answeredChoiceId: decoded.questionId },
       ).catch((err) => {
         console.error("evt=callback_error processing failed:", err);
       });
