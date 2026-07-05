@@ -51,61 +51,20 @@ export const PRIVACY_NOTICE =
   "You can text \"delete my account\" anytime — instant wipe, no questions.\n\n" +
   "Reply YES to start. Reply STOP if this isn't for you.";
 
-// V2 (v1.1 flow redesign) — Strava-first.
-//
-// Sent after the runner accepts the privacy notice. Bundles the Strava
-// connect offer with a fallback onboarding bridge. Opt-in framing —
-// Strava is the recommended path because the LLM can ground every reply
-// in real activity data, but the runner can skip and start onboarding
-// by just replying with their name and goal.
-//
-// Why bundle vs. a separate Strava-only message:
-//   - Avoids introducing a new state vertex (Strava-pending) in the
-//     consent state machine, which would have to be detected by
-//     last-outbound matching.
-//   - The runner can act on either path from a single message: tap the
-//     link in their browser, or just type the answer.
-//   - If Strava IS connected before the next inbound, onboarding (V3)
-//     can confirm questions instead of asking them.
-//
-// Fallback: if the public webhook base isn't configured (link can't be
-// generated), fall back to a text-only bridge to onboarding so the
-// runner isn't left without a question to answer.
-export async function buildConsentAcceptedReply(
-  athleteId: string,
-): Promise<string> {
-  const linkUrl = await buildStravaConnectLink(athleteId);
-  if (linkUrl) {
-    return (
-      "You're in. Quickest start: connect Strava and I'll see your training " +
-      "automatically — no need to retype the last few weeks. Tap the link " +
-      "(expires in 5 min):\n\n" +
-      linkUrl +
-      "\n\nPrefer to skip Strava? Just reply and I'll grab a few quick " +
-      "details to build your plan."
-    );
-  }
-  // F2-b: stay neutral — the onboarder sends the single compact question
-  // on the next turn, so we don't pre-ask specific fields here (that would
-  // double-ask).
-  return (
-    "You're in. Reply and I'll grab a few quick details to build your plan."
-  );
-}
+// Consent buttons — taps type the canonical words the classifier already
+// accepts ("yes" / "stop"). Buttons are an accelerator, never a wall: typed
+// replies keep working unchanged.
+export const Q_CONSENT: import("./messaging/choices.js").ChoiceQuestion = {
+  id: "consent",
+  choices: [
+    { value: "yes", label: "✅ I'm in", synonyms: ["im in", "i'm in"] },
+    { value: "stop", label: "No thanks", synonyms: ["no thanks"] },
+  ],
+};
 
-// Returns a fresh magic link if Strava is configured and the athlete
-// isn't already connected. Otherwise null — the consent reply falls
-// back to the plain onboarding bridge.
-async function buildStravaConnectLink(athleteId: string): Promise<string | null> {
-  if (!config.twilio.publicWebhookBase) return null;
-  try {
-    const conn = await findByAthleteId(athleteId);
-    if (conn && !conn.revokedAt) return null;
-    return buildMagicLinkUrl(athleteId);
-  } catch {
-    return null;
-  }
-}
+// The post-consent Strava-first handoff died with Strava's paid API gating
+// (June 2026): consent-accept now runs intake turn 1 directly in
+// process-incoming, so there's no dead handoff message and no dead offer.
 
 export const CONSENT_DECLINED_REPLY =
   "All good — your data won't be stored. If you change your mind, text MARP again anytime.";

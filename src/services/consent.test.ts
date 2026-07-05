@@ -4,11 +4,11 @@ import { db } from "../db/client.js";
 import { assertNotProductionDb } from "../db/test-guard.js";
 import { athletes } from "../db/schema.js";
 import {
-  buildConsentAcceptedReply,
   classifyConsentReply,
   CONSENT_AMBIGUOUS_REPLY,
   CONSENT_DECLINED_REPLY,
   PRIVACY_NOTICE,
+  Q_CONSENT,
   recordConsentGranted,
 } from "./consent.js";
 
@@ -52,19 +52,12 @@ describe("privacy copy", () => {
     expect(PRIVACY_NOTICE.toLowerCase()).toContain("sold");
   });
 
-  test("accepted reply bridges to something actionable (Strava link OR onboarding question)", async () => {
-    // V2 (Strava-first): either path leaves the runner with a concrete
-    // next action — tap a link, or answer the onboarding question.
-    // Whichever path runs, the reply must end with either a magic link
-    // or a question mark. NEVER leave the runner with no next step.
-    const [a] = await db
-      .insert(athletes)
-      .values({ phone: "+15551110701" })
-      .returning();
-    if (!a) throw new Error("insert failed");
-    const reply = await buildConsentAcceptedReply(a.id);
-    expect(reply.length).toBeGreaterThan(0);
-    expect(reply).toMatch(/\?/);
+  test("consent buttons type the canonical words the classifier accepts", () => {
+    // Taps ARE typed answers: "yes" and "stop" must classify cleanly, or a
+    // button tap would fall into the ambiguous re-prompt loop.
+    expect(classifyConsentReply("yes")).toBe("accept");
+    expect(classifyConsentReply("stop")).toBe("decline");
+    expect(Q_CONSENT.choices.map((c) => c.value)).toEqual(["yes", "stop"]);
   });
 
   test("declined reply confirms data won't be stored", () => {

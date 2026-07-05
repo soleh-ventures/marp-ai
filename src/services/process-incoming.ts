@@ -20,11 +20,47 @@ import { fireTypingIndicator } from "./typing-indicator.js";
 import {
   PIVOT_QUESTION,
   PIVOT_REPLY_BYO,
+  Q_PIVOT,
   classifyPivotReply,
   getPivotState,
   isAwaitingPivotChoice,
   withPivotState,
 } from "./post-onboarding-pivot.js";
+import {
+  MSG_CALIB_OFFER,
+  MSG_COACH_QUESTION,
+  Q_CALIB,
+  Q_COACH,
+  buildReask,
+  getCoachPrefs,
+  getPrefsState,
+  handlePrefsTurn,
+  startPrefsFlow,
+} from "../flows/preferences.js";
+import type { ChoiceQuestion } from "./messaging/choices.js";
+import { matchFreeText } from "./messaging/choices.js";
+import {
+  getPendingChoice,
+  resolvePendingChoice,
+  setPendingChoice,
+} from "./messaging/pending-choice.js";
+import { logFunnel } from "./funnel.js";
+import {
+  CAL_LATER_REPLY,
+  CAL_NOT_CONFIGURED_REPLY,
+  CAL_OFFER,
+  CAL_OFFER_SIGNATURE,
+  Q_CAL_OFFER,
+  buildCalendarExportReply,
+  looksLikeCalendarExportRequest,
+  looksLikeCalendarResetRequest,
+  resetCalendarFeed,
+} from "./intents/calendar-export.js";
+import { applyPrefEdit, detectPrefEdit } from "./intents/pref-edit.js";
+import {
+  looksLikeGarminConnect,
+  recordGarminInterest,
+} from "./intents/integrations.js";
 import { classifyPivotIntent, fastPathChoice } from "./pivot-intent.js";
 import { generatePlan } from "./plan/generator.js";
 import { ingestPlan } from "./plan/ingest.js";
@@ -39,6 +75,7 @@ import {
   REMINDER_PROMPT,
   REMINDER_PROMPT_SIGNATURE,
   REMINDER_REASK,
+  Q_REMINDER,
   type PrefsCaptureResult,
   classifyPrefsReply,
   isPrefsAsked,
@@ -66,7 +103,6 @@ import {
 } from "./weekly-evaluation.js";
 import {
   buildConnectReply,
-  buildOnboardingStravaOffer,
   getStravaConnectStatus,
   looksLikeStravaConnect,
 } from "./strava-connect.js";
@@ -90,7 +126,7 @@ import {
   CONSENT_AMBIGUOUS_REPLY,
   CONSENT_DECLINED_REPLY,
   PRIVACY_NOTICE,
-  buildConsentAcceptedReply,
+  Q_CONSENT,
   classifyConsentReply,
   recordConsentGranted,
 } from "./consent.js";
@@ -123,6 +159,7 @@ async function ingestAndSaveByoPlan(input: {
   });
   if (result.ok) {
     await saveAthletePlan(input.athleteId, result.plan);
+    logFunnel("plan_created", input.athleteId);
     const updatedHistory = withPivotState(input.history, "done");
     // F8c: Strava-derived tz (where they run) beats the phone dial code.
     const tz = await bestTimezoneForAthlete(input.athleteId, input.phone);
@@ -133,7 +170,7 @@ async function ingestAndSaveByoPlan(input: {
         ...(tz ? { timezone: tz } : {}),
       })
       .where(eq(athletes.id, input.athleteId));
-    return renderPlanSummary(result.plan) + REMINDER_PROMPT;
+    return renderPlanSummary(result.plan) + CAL_OFFER;
   }
   if (result.reason === "not_a_plan") {
     return (
@@ -226,7 +263,15 @@ export async function processIncomingMessage(
   // the legacy fitness-file path uses mediaUrl (the first). Defaults to the
   // single (mediaUrl, mediaContentType) pair when not supplied.
   media?: MediaItem[],
+  // synthetic: the body is a canonical value from a button tap — a string WE
+  // wrote, not the athlete's prose. Skips safety triage and the free-text
+  // enrichment LLMs (binder, flag detector, run feeling): a tap can't be a
+  // crisis message, and canonical words like "hard"/"aggressive" must never
+  // become spurious sentiment flags (eng amendment 3). Branch logic is
+  // unchanged — one pipeline for taps and typing.
+  opts?: { synthetic?: boolean },
 ): Promise<void> {
+  const synthetic = opts?.synthetic === true;
   // The full attachment list — prefer the explicit array; fall back to the
   // single legacy pair so existing callers keep working.
   const allMedia: MediaItem[] =
@@ -261,7 +306,11 @@ export async function processIncomingMessage(
   // to a scripted, region-aware response + operator alert — never an LLM
   // coaching reply. A Tier-1 red flag lets the normal flow run but
   // prepends a hard referral to whatever reply gets built.
-  const triage = await triageSafety(body, { athleteId, messageId });
+  const triage = synthetic
+    ? ({ tier: "none", category: "none", reason: "" } as Awaited<
+        ReturnType<typeof triageSafety>
+      >)
+    : await triageSafety(body, { athleteId, messageId });
   if (triage.tier === "emergency") {
     // The runner is in crisis — get the help number to them FIRST. The
     // audit write + operator alert must NEVER delay the crisis reply, so
@@ -366,7 +415,10 @@ export async function processIncomingMessage(
   // still complete a delete-confirm flow (rare but possible if they
   // typed YES DELETE before any privacy notice ever shipped).
   if (!athleteRow.consentGrantedAt) {
-    if (lastOutboundBody === PRIVACY_NOTICE) {
+    // The notice may have shipped with the numbered-text fallback appended
+    // (rendered body is what's persisted — eng amendment 4), so match on
+    // prefix, not equality.
+    if (lastOutboundBody !== null && lastOutboundBody.startsWith(PRIVACY_NOTICE)) {
       const decision = classifyConsentReply(body);
       if (decision === "decline") {
         await archiveAthlete(athleteId);
@@ -376,21 +428,36 @@ export async function processIncomingMessage(
         return;
       }
       if (decision === "ambiguous") {
-        await sendAndPersist(athleteId, athleteRow.phone, CONSENT_AMBIGUOUS_REPLY);
+        await sendAndPersist(
+          athleteId,
+          athleteRow.phone,
+          CONSENT_AMBIGUOUS_REPLY,
+          Q_CONSENT,
+        );
         return;
       }
-      // accept: persist consent, send the warm-handoff. The next
-      // inbound from the runner triggers onboarding.
-      // V2: handoff bundles the Strava-first connect offer. Runner
-      // can tap the link (then onboarding picks up after) or just
-      // reply with their name/goal to skip Strava.
+      // Accept: persist consent and run intake turn 1 RIGHT NOW — the tap
+      // flows straight into the first question instead of a dead handoff
+      // message (Strava offer removed: API paywalled, offer died with it).
       await recordConsentGranted(athleteId);
-      const acceptedReply = await buildConsentAcceptedReply(athleteId);
-      await sendAndPersist(athleteId, athleteRow.phone, acceptedReply);
+      logFunnel("onboarding_started", athleteId);
+      try {
+        const first = await runOnboardingTurn(athleteId, messageId, body);
+        await sendAndPersist(athleteId, athleteRow.phone, first.reply);
+      } catch (err) {
+        console.error("consent: intake turn 1 failed", err);
+        await sendAndPersist(
+          athleteId,
+          athleteRow.phone,
+          "You're in. Tell me about yourself — name, age, your goal (race + " +
+            "date, or just \"get fitter\"), how much you run now, days per " +
+            "week you can train, any injuries, and which city you're in.",
+        );
+      }
       return;
     }
-    // First-touch case: no prior notice. Ship it and exit.
-    await sendAndPersist(athleteId, athleteRow.phone, PRIVACY_NOTICE);
+    // First-touch case: no prior notice. Ship it (with consent buttons) and exit.
+    await sendAndPersist(athleteId, athleteRow.phone, PRIVACY_NOTICE, Q_CONSENT);
     return;
   }
 
@@ -470,7 +537,9 @@ export async function processIncomingMessage(
   // Run in parallel — they touch different tables and don't observe
   // each other. Errors are swallowed; a failed flag-detect or bind
   // shouldn't block the reply.
-  const [bindRes] = await Promise.all([
+  const [bindRes] = synthetic
+    ? [{ resolved: false } as BindResult]
+    : await Promise.all([
     bindReply(athleteId, messageId, body).catch((err): BindResult => {
       console.error("binder threw:", err);
       return { resolved: false };
@@ -510,6 +579,9 @@ export async function processIncomingMessage(
   }
 
   let replyText: string;
+  // Closed question attached to this turn's reply (inline keyboard on
+  // Telegram; numbered-text fallback elsewhere). Set by branches that ask.
+  let replyChoices: ChoiceQuestion | undefined;
   // ET6: if the expert router emits a decision_frame, we persist it
   // alongside the outbound message so the binder (ET7) has it to resolve
   // against a future runner reply. Only the routing branch produces
@@ -540,6 +612,7 @@ export async function processIncomingMessage(
     try {
       const plan = await generatePlan({ athleteId, messageId });
       await saveAthletePlan(athleteId, plan);
+      logFunnel("plan_created", athleteId);
       const updatedHistory = withPivotState(history, "done");
       // F8c: Strava-derived tz (where they run) beats the phone dial code.
       const tz = await bestTimezoneForAthlete(athleteId, athleteRow.phone);
@@ -553,7 +626,7 @@ export async function processIncomingMessage(
       // v1.3 (A3): draft-first hooks — invite collaboration on the fresh plan
       // before the reminder ask. Empty string when the model had no open
       // questions, so the message stays clean.
-      return renderPlanSummary(plan) + renderOpenQuestions(plan) + REMINDER_PROMPT;
+      return renderPlanSummary(plan) + renderOpenQuestions(plan) + CAL_OFFER;
     } catch (err) {
       console.error("plan-generator failed:", (err as Error).message);
       return (
@@ -581,24 +654,66 @@ export async function processIncomingMessage(
     );
     replyText = onboardingResult.reply;
 
-    // When onboarding wraps up this turn:
-    //  1. Strava offer (if not connected) — second-chance prompt
-    //  2. V5: append the post-onboarding plan pivot — runners need a
-    //     concrete next step, not "ask me anything"
-    //  3. V5: persist pivot_state = "awaiting_choice" so the next
-    //     inbound is matched against the a/b classifier
+    // When the LLM intake wraps up this turn, the deterministic preference
+    // phase begins: mirror card first (the athlete sees they were heard),
+    // then the three taps, holistic, and only then the plan pivot. The old
+    // Strava offer died with the paid API.
     if (onboardingResult.finishedThisTurn) {
-      const offer = await buildOnboardingStravaOffer(athleteId).catch(() => null);
-      if (offer) replyText += offer;
-      replyText += PIVOT_QUESTION;
-      const updatedHistory = withPivotState(
-        onboardingResult.newHistory,
-        "awaiting_choice",
-      );
-      await db
-        .update(athletes)
-        .set({ athleticHistory: updatedHistory })
-        .where(eq(athletes.id, athleteId));
+      const started = await startPrefsFlow(athleteId, onboardingResult.newHistory);
+      replyText += `\n\n${started.reply}`;
+      replyChoices = started.choices;
+    }
+  } else if (
+    getPrefsState(history) !== undefined &&
+    getPrefsState(history) !== "done"
+  ) {
+    // ── Preference phase (deterministic, no LLM per tap) ────────────────
+    // Re-entry recap: they went silent mid-flow and came back — one line of
+    // orientation before the flow resumes (design finding 5).
+    const REENTRY_GAP_MS = 12 * 60 * 60 * 1000;
+    const cameBack =
+      athleteRow.lastSeenAt !== null &&
+      Date.now() - athleteRow.lastSeenAt.getTime() > REENTRY_GAP_MS;
+    const recap = cameBack
+      ? "Welcome back — your profile's saved, we're a couple of taps from your plan.\n\n"
+      : "";
+    const turn = await handlePrefsTurn({ athleteId, messageId, body, history });
+    if (turn.kind === "handled") {
+      replyText = recap + turn.reply;
+      replyChoices = turn.choices;
+      if (turn.pivotReady) {
+        // Prefs + holistic done → the plan pivot, with buttons. Re-read
+        // history (handlePrefsTurn just wrote it) before setting pivot state.
+        const [freshRow] = await db
+          .select({ athleticHistory: athletes.athleticHistory })
+          .from(athletes)
+          .where(eq(athletes.id, athleteId))
+          .limit(1);
+        const fresh = getAthleticHistory(freshRow?.athleticHistory);
+        await db
+          .update(athletes)
+          .set({ athleticHistory: withPivotState(fresh, "awaiting_choice") })
+          .where(eq(athletes.id, athleteId));
+        replyText = replyText
+          ? `${replyText}${PIVOT_QUESTION}`
+          : PIVOT_QUESTION.trimStart();
+        replyChoices = Q_PIVOT;
+      }
+    } else {
+      // Interruption: answer the actual question in persona, then re-ask the
+      // open preference question once; a second miss applies a SPOKEN default.
+      fireTypingIndicator(inboundSid);
+      const memory = await getMemoryContext(athleteId);
+      const routed = await route({
+        message: body,
+        athleteId,
+        messageId,
+        contextSummary: memory.text,
+      });
+      const reask = await buildReask(athleteId, history);
+      replyText = routed.finalText.trim() + reask.append;
+      replyChoices = reask.choices;
+      routerFrame = routed.frame;
     }
   } else if (
     !isPrefsAsked(athleteRow.reminderPrefs) &&
@@ -733,6 +848,7 @@ export async function processIncomingMessage(
         });
 
     if (read.intent === "byo") {
+      logFunnel("pivot_chosen", athleteId);
       // Coach-voice acknowledgement (LLM-generated, adapted to what they
       // said); fall back to the static line only if the model gave none.
       replyText = read.reply ?? PIVOT_REPLY_BYO;
@@ -742,6 +858,7 @@ export async function processIncomingMessage(
         .set({ athleticHistory: updatedHistory })
         .where(eq(athletes.id, athleteId));
     } else if (read.intent === "build") {
+      logFunnel("pivot_chosen", athleteId);
       // Runner picked (b) — generate the plan in this same turn.
       replyText = await buildPlanForRunner();
     } else if (read.intent === "plan_content") {
@@ -758,7 +875,7 @@ export async function processIncomingMessage(
             ...(tz ? { timezone: tz } : {}),
           })
           .where(eq(athletes.id, athleteId));
-        replyText = renderPlanSummary(result.plan) + REMINDER_PROMPT;
+        replyText = renderPlanSummary(result.plan) + CAL_OFFER;
       } else {
         // Looked like a paste but didn't parse — move into awaiting_plan so the
         // next message is handled as the (clarified) paste rather than re-asked.
@@ -857,9 +974,67 @@ export async function processIncomingMessage(
         .where(eq(athletes.id, athleteId));
       replyText = REMINDER_CAPTURED_REPLY(reminderReq.time_local, reminderReq.timing);
     }
+  } else if (
+    getPendingChoice(history)?.question_id === "caloffer" &&
+    matchFreeText(Q_CAL_OFFER, body) !== null
+  ) {
+    // Post-plan calendar offer answered.
+    const choice = matchFreeText(Q_CAL_OFFER, body);
+    await resolvePendingChoice(athleteId, "caloffer");
+    if (choice === "add_calendar") {
+      replyText =
+        (buildCalendarExportReply(athleteId, history) ?? CAL_NOT_CONFIGURED_REPLY) +
+        REMINDER_PROMPT;
+    } else {
+      replyText = CAL_LATER_REPLY + REMINDER_PROMPT;
+    }
+  } else if (looksLikeCalendarResetRequest(body)) {
+    // "Reset my calendar link" — revoke every previously shared feed URL.
+    replyText = await resetCalendarFeed(athleteId);
+  } else if (looksLikeCalendarExportRequest(body) && getStoredPlan(history)) {
+    // "Add my plan to my calendar" — deterministic capability, no LLM (the
+    // June bug was the model OFFERING calendar writes it couldn't do).
+    replyText =
+      buildCalendarExportReply(athleteId, history) ?? CAL_NOT_CONFIGURED_REPLY;
+  } else if (
+    getPendingChoice(history)?.question_id === "calib" &&
+    matchFreeText(Q_CALIB, body) !== null
+  ) {
+    // Existing athlete answering the quick-calibration offer.
+    const choice = matchFreeText(Q_CALIB, body);
+    await resolvePendingChoice(athleteId, "calib");
+    if (choice === "set_style") {
+      await db
+        .update(athletes)
+        .set({ athleticHistory: { ...history, prefs_state: "coach" } })
+        .where(eq(athletes.id, athleteId));
+      replyText = MSG_COACH_QUESTION;
+      replyChoices = Q_COACH;
+    } else {
+      replyText = "No problem — say \"set my style\" anytime.";
+    }
+  } else if (detectPrefEdit(body) !== null) {
+    // "be more brief" / "harder on me" / "/settings" — preferences are living
+    // state. Enum-constrained writes only (never LLM-extracted free text).
+    const edit = detectPrefEdit(body)!;
+    if (edit.kind === "open_settings") {
+      await db
+        .update(athletes)
+        .set({ athleticHistory: { ...history, prefs_state: "coach" } })
+        .where(eq(athletes.id, athleteId));
+      replyText = MSG_COACH_QUESTION;
+      replyChoices = Q_COACH;
+    } else {
+      replyText = await applyPrefEdit(athleteId, edit);
+    }
+  } else if (looksLikeGarminConnect(body)) {
+    // Garmin is founder-only today (unofficial sidecar) — interest becomes a
+    // waitlist signal for the source-agnostic ingestion track, not a dead end.
+    replyText = await recordGarminInterest(athleteId);
   } else if (looksLikeStravaConnect(body)) {
-    // Explicit Strava connect intent — skip the expert router and reply
-    // with the magic link directly. No LLM call needed.
+    // Explicit Strava intent — honest reply (API paywalled June 2026): what
+    // works today + the Garmin waitlist. Founder's existing connection still
+    // gets the "already connected" answer.
     const status = await getStravaConnectStatus(athleteId);
     replyText = buildConnectReply(status);
   } else {
@@ -879,9 +1054,16 @@ export async function processIncomingMessage(
       const result = await adjustPlan({ athleteId, messageId, editRequest: body });
       if (result.ok) {
         await saveAthletePlan(athleteId, result.plan);
+        // Feed staleness policy: a subscribed calendar picks the change up on
+        // its next poll — say so, don't let the athlete wonder.
+        const feedNote =
+          history.calendar_connected_at !== undefined
+            ? "\n\n(Your calendar feed picks this up within a day.)"
+            : "";
         replyText =
           "Done — updated your plan. Here's the new version:\n\n" +
-          renderPlanSummary(result.plan);
+          renderPlanSummary(result.plan) +
+          feedNote;
       } else {
         // no_plan is guarded above; this is the parse-failure path.
         replyText =
@@ -899,11 +1081,43 @@ export async function processIncomingMessage(
       replyText = result.finalText.trim();
       routerFrame = result.frame;
     }
+
+    // Migration beat (once): an athlete from before the preference era gets
+    // the quick-calibration offer — AFTER their actual question is answered,
+    // never instead of it, and never stapled to a safety referral.
+    if (
+      getPrefsState(history) === undefined &&
+      !getCoachPrefs(history).coaching_style &&
+      history.coach_prefs_offer_at === undefined &&
+      !safetyReferral
+    ) {
+      await db
+        .update(athletes)
+        .set({
+          athleticHistory: {
+            ...history,
+            coach_prefs_offer_at: new Date().toISOString(),
+          },
+        })
+        .where(eq(athletes.id, athleteId));
+      replyText += MSG_CALIB_OFFER;
+      replyChoices = Q_CALIB;
+    }
   }
 
   if (!replyText) {
     console.error(`processIncoming: empty reply for message ${messageId}`);
     return;
+  }
+
+  // Signature-driven button attachment: any branch whose reply carries the
+  // calendar offer or the reminder ask gets the matching buttons, without
+  // every plan-creating call site having to thread a choices value out.
+  if (!replyChoices && replyText.includes(CAL_OFFER_SIGNATURE)) {
+    replyChoices = Q_CAL_OFFER;
+  }
+  if (!replyChoices && replyText.includes(REMINDER_PROMPT_SIGNATURE)) {
+    replyChoices = Q_REMINDER;
   }
 
   // S1: a Tier-1 referral prepends a hard referral to whatever reply the
@@ -915,6 +1129,7 @@ export async function processIncomingMessage(
     athleteId,
     athleteRow.phone,
     finalReply,
+    replyChoices,
   );
 
   // ET6 + ET8: record the pending decision after we have the outbound
@@ -1002,13 +1217,14 @@ async function sendAndPersist(
   athleteId: string,
   _phone: string,
   body: string,
+  choices?: ChoiceQuestion,
 ): Promise<{ outboundMessageId: string | null }> {
   // Route via the channel router (WhatsApp or Telegram per MESSAGING_CHANNEL).
   // deliver() resolves the athlete's contact ids itself, so _phone is no longer
   // needed here (kept in the signature for call-site compatibility).
   let result: Awaited<ReturnType<typeof deliver>>;
   try {
-    result = await deliver(athleteId, body);
+    result = await deliver(athleteId, body, choices ? { choices } : undefined);
   } catch (err) {
     if (err instanceof TwilioSendError) {
       console.error(`Send failed (${err.status}): ${err.body.slice(0, 200)}`);
@@ -1019,18 +1235,31 @@ async function sendAndPersist(
   }
   if (!result) return { outboundMessageId: null };
 
-  // Persist the outbound message for the next turn's memory retrieval. The
-  // Twilio SID column only holds Twilio ids; Telegram ids live in the channel.
+  // Persist the RENDERED body — what the athlete actually saw, numbered-text
+  // fallback included — so lastOutbound signature checks stay honest (eng
+  // amendment 4). The Twilio SID column only holds Twilio ids; Telegram ids
+  // live in the channel.
   const [inserted] = await db
     .insert(messages)
     .values({
       athleteId,
       direction: "out",
-      body,
+      body: result.renderedBody,
       channel: result.channel,
       twilioMessageSid:
         result.channel === "whatsapp" ? result.providerMessageId : null,
     })
     .returning({ id: messages.id });
+
+  // Open the pending question: the server-side truth that makes double-taps
+  // idempotent and lets a typed answer retire the live keyboard.
+  if (choices) {
+    await setPendingChoice(athleteId, {
+      question_id: choices.id,
+      tg_message_id: result.keyboardSent ? result.providerMessageId : null,
+      asked_at: new Date().toISOString(),
+    });
+  }
+
   return { outboundMessageId: inserted?.id ?? null };
 }

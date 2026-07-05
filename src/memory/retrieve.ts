@@ -349,6 +349,63 @@ export function formatActivityLine(a: ActivityRow): string {
 // active race block's goalFinishTime > the onboarding target_race fallback.
 // Always carries an explicit "don't invent a time" guard — the bug was the
 // LLM confabulating a target when the real one was absent or buried.
+// Coach calibration block from coach_prefs (set by the preference taps).
+// Rendered as explicit behavioral instructions. Reply length is a DEFAULT
+// the athlete chose — an explicit in-message request ("explain in detail",
+// "quick answer") ALWAYS overrides it, and safety content is never
+// shortened. Exported for tests + the persona eval.
+export function renderCoachCalibration(athleticHistory: unknown): string | null {
+  const prefs = (athleticHistory as Record<string, unknown> | null)?.coach_prefs;
+  if (!prefs || typeof prefs !== "object") return null;
+  const p = prefs as Record<string, unknown>;
+  const lines: string[] = [];
+
+  if (p.coaching_style === "director") {
+    lines.push(
+      "Relationship: DIRECTOR — you make the calls, state them plainly, flag " +
+        "risks without softening, and push. No hand-holding, no cheerleading " +
+        "filler. Direct, demanding, never cruel.",
+    );
+  } else if (p.coaching_style === "companion") {
+    lines.push(
+      "Relationship: COMPANION — a friend at their side. Warm, patient, " +
+        "encouraging first; frame guidance as support, celebrate effort, " +
+        "never bark orders.",
+    );
+  } else if (p.coaching_style === "partner") {
+    lines.push(
+      "Relationship: PARTNER — decide together. Direct but encouraging; " +
+        "present the call AND the reasoning, invite their input on forks.",
+    );
+  }
+
+  if (p.reply_style === "short") {
+    lines.push(
+      "Reply length DEFAULT: SHORT — the essentials, 2-3 sentences. This is " +
+        "a default, NOT a cap: when the runner explicitly asks for detail or " +
+        "an explanation genuinely needs room (safety, injury, plan " +
+        "rationale), give the full answer.",
+    );
+  } else if (p.reply_style === "long") {
+    lines.push(
+      "Reply length DEFAULT: LONG — full reasoning and context by default. " +
+        "Still a default: when the runner asks for a quick answer, be quick.",
+    );
+  } else if (p.reply_style === "balanced") {
+    lines.push(
+      "Reply length DEFAULT: BALANCED — a solid paragraph when it matters. " +
+        "Explicit requests for more or less always win.",
+    );
+  }
+
+  if (typeof p.training_style === "string") {
+    lines.push(`Training push preference: ${p.training_style} (plan-level; the plan generator applies it).`);
+  }
+
+  if (lines.length === 0) return null;
+  return `Coach calibration (athlete-chosen):\n${lines.join("\n")}`;
+}
+
 export function resolveGoalLine(
   block: FormatInput["block"],
   athleticHistory: unknown,
@@ -461,6 +518,14 @@ export function formatContext(input: FormatInput): string {
   // authoritative line with an explicit "don't invent a time" guard.
   const goalLine = resolveGoalLine(input.block, input.athleticHistory);
   if (goalLine) parts.push(goalLine);
+
+  // Coach calibration — the athlete's chosen relationship, default reply
+  // length, and training push, rendered as explicit instructions so the
+  // synthesizer/domain prompts can obey them. Length is a DEFAULT, never a
+  // cap: an explicit in-message request always overrides (founder decision,
+  // final gate 2026-07-05).
+  const calibration = renderCoachCalibration(input.athleticHistory);
+  if (calibration) parts.push(calibration);
 
   // Athletic history JSON — but strip out the plan (rendered separately
   // below with real dates) and target_race (now surfaced as the resolved

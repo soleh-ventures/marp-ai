@@ -24,6 +24,7 @@
 import { config } from "../../config.js";
 import { runReminderScheduler } from "./scheduler.js";
 import { runWeeklyEvaluationSweep } from "../weekly-evaluation.js";
+import { runOnboardingNudges } from "../onboarding-nudge.js";
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let running = false;
@@ -56,6 +57,14 @@ async function tick(): Promise<void> {
     }
   } catch (err) {
     console.error("weekly evaluation sweep failed:", (err as Error).message);
+  }
+  // Onboarding revamp: one gentle nudge for athletes who went silent
+  // mid-preference-phase (>24h), at most once per athlete ever.
+  try {
+    const nudged = await runOnboardingNudges(new Date());
+    if (nudged > 0) console.log(`onboarding nudges sent: ${nudged}`);
+  } catch (err) {
+    console.error("onboarding nudge sweep failed:", (err as Error).message);
   } finally {
     running = false;
   }

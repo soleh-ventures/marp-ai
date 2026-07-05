@@ -21,13 +21,87 @@ import { eq } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { athletes } from "../db/schema.js";
 import { buildIcsForSession } from "../services/cal/build.js";
-import { verifyCalToken } from "../services/cal/token.js";
+import { buildPlanFeed } from "../services/cal/export.js";
+import { verifyCalToken, verifyPlanFeedToken } from "../services/cal/token.js";
+import { logFunnel } from "../services/funnel.js";
 import { getAthleticHistory } from "../flows/onboarding.js";
 import { readPrefs } from "../services/reminders/prefs.js";
 import { getStoredPlan } from "../services/plan/storage.js";
 import type { PlanSession } from "../services/plan/types.js";
 
 export const cal = new Hono();
+
+// GET /cal/plan/:token.ics — the WHOLE-plan feed (subscription + download).
+// Re-renders from the current stored plan on every fetch, so a subscribed
+// calendar picks up plan changes on its next poll. Revocation: the token
+// carries a feed version compared against athleticHistory.cal_feed_version
+// ("reset my calendar link" bumps it → old URLs go 410).
+cal.get("/plan/:tokenWithExt", async (c) => {
+  const tokenWithExt = c.req.param("tokenWithExt");
+  const token = tokenWithExt.endsWith(".ics")
+    ? tokenWithExt.slice(0, -4)
+    : tokenWithExt;
+
+  const v = verifyPlanFeedToken(token);
+  if (!v.ok) return c.text(v.reason, 403);
+
+  const rows = await db
+    .select({
+      athleticHistory: athletes.athleticHistory,
+      reminderPrefs: athletes.reminderPrefs,
+      archivedAt: athletes.archivedAt,
+    })
+    .from(athletes)
+    .where(eq(athletes.id, v.payload.athleteId))
+    .limit(1);
+  const row = rows[0];
+  // Archived/deleted athlete or revoked link: a calm plain-text body — the
+  // calendar app shows a fetch error, the human who opens the URL sees why.
+  if (!row || row.archivedAt) {
+    return c.text("This calendar link is no longer active — message MARP for a new one.", 404);
+  }
+
+  const history = getAthleticHistory(row.athleticHistory);
+  const currentVersion =
+    typeof history.cal_feed_version === "number" ? history.cal_feed_version : 1;
+  if (v.payload.feedVersion !== currentVersion) {
+    return c.text("This calendar link was reset — message MARP for a new one.", 410);
+  }
+
+  const plan = getStoredPlan(history);
+  if (!plan) {
+    return c.text("No plan on file yet — message MARP to build one.", 404);
+  }
+
+  // calendar_connected fires on the FIRST feed fetch (funnel definition from
+  // the plan review) — best-effort, never blocks the response.
+  if (history.calendar_connected_at === undefined) {
+    logFunnel("calendar_connected", v.payload.athleteId);
+    void db
+      .update(athletes)
+      .set({
+        athleticHistory: {
+          ...history,
+          calendar_connected_at: new Date().toISOString(),
+        },
+      })
+      .where(eq(athletes.id, v.payload.athleteId))
+      .then(
+        () => {},
+        () => {},
+      );
+  }
+
+  const ics = buildPlanFeed(plan, {
+    preferredTime: history.preferred_time,
+    reminderPrefs: readPrefs(row.reminderPrefs),
+  });
+  return c.body(ics, 200, {
+    "Content-Type": "text/calendar; charset=utf-8",
+    "Content-Disposition": `attachment; filename="marp-plan.ics"`,
+    "Cache-Control": "private, max-age=3600",
+  });
+});
 
 cal.get("/:tokenWithExt", async (c) => {
   const tokenWithExt = c.req.param("tokenWithExt");
