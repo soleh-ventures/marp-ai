@@ -10,8 +10,37 @@ import { getAthleticHistory } from "../../flows/onboarding.js";
 import {
   GARMIN_ALREADY_CONNECTED_REPLY,
   GARMIN_WAITLIST_REPLY,
+  looksLikeGarminConnect,
   recordGarminInterest,
 } from "./integrations.js";
+
+describe("looksLikeGarminConnect — connect intent only, not data requests", () => {
+  it("matches explicit connect/link/setup intent", () => {
+    for (const m of [
+      "connect my garmin",
+      "link garmin",
+      "set up garmin",
+      "garmin setup",
+      "pair my garmin",
+      "connect my watch",
+    ]) {
+      expect(looksLikeGarminConnect(m)).toBe(true);
+    }
+  });
+
+  it("does NOT hijack data/analysis requests → they reach the coach", () => {
+    for (const m of [
+      "pull my garmin data",
+      "analyze my garmin run",
+      "what does my garmin say about my readiness",
+      "how was my last garmin run",
+      "sync my latest runs and tell me how i did",
+      "garmin",
+    ]) {
+      expect(looksLikeGarminConnect(m)).toBe(false);
+    }
+  });
+});
 
 assertNotProductionDb();
 
