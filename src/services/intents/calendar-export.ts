@@ -10,6 +10,11 @@ import { athletes } from "../../db/schema.js";
 import type { AthleticHistory } from "../../flows/onboarding.js";
 import { getAthleticHistory } from "../../flows/onboarding.js";
 import { generatePlanFeedToken } from "../cal/token.js";
+import {
+  buildGoogleMagicLinkUrl,
+  isGoogleConfigured,
+} from "../google-calendar.js";
+import { findGoogleByAthleteId } from "../google-connections.js";
 import type { ChoiceQuestion } from "../messaging/choices.js";
 
 const EXPORT_PATTERNS = [
@@ -75,22 +80,97 @@ function feedUrls(athleteId: string, history: AthleticHistory): {
   return { https, webcal };
 }
 
-// The export reply: subscribe-first (auto-updates), download as the alt,
-// one platform hint per platform. Returns null when the public base URL
-// isn't configured (caller falls back to an honest "not set up" line).
-export function buildCalendarExportReply(
+// The export reply: Google sign-in first when available (real integration —
+// MARP writes and re-syncs the events itself), webcal subscribe as the
+// no-account path, download as the fallback. Returns null when the public
+// base URL isn't configured (caller falls back to an honest "not set up"
+// line).
+export async function buildCalendarExportReply(
   athleteId: string,
   history: AthleticHistory,
-): string | null {
+): Promise<string | null> {
   const urls = feedUrls(athleteId, history);
   if (!urls) return null;
+
+  // Google line: offered when configured and not already connected. The
+  // athlete signs in once; MARP inserts every session and keeps them synced.
+  let googleLine = "";
+  if (isGoogleConfigured()) {
+    const conn = await findGoogleByAthleteId(athleteId).catch(() => null);
+    if (conn && !conn.revokedAt) {
+      googleLine =
+        "✅ Google Calendar is connected — sessions sync automatically.\n\n";
+    } else {
+      googleLine =
+        "🔗 Best on Google Calendar: sign in once and I put every session " +
+        "in myself, updates included (link expires in 5 min):\n" +
+        buildGoogleMagicLinkUrl(athleteId) +
+        "\n\n";
+    }
+  }
+
   return (
     "Here's your plan as a calendar — every session, with the why baked in:\n\n" +
-    `📲 Subscribe (auto-updates when the plan changes):\n${urls.webcal}\n\n` +
+    googleLine +
+    `📲 Subscribe by link (works anywhere, auto-updates):\n${urls.webcal}\n\n` +
     `📥 Or a one-time import file:\n${urls.https}\n\n` +
-    "iPhone: tap the first link → Subscribe. Google Calendar: on the web, " +
-    "Settings → Add calendar → From URL → paste the second link. Updates " +
-    "show up within a day of a plan change."
+    "iPhone: tap the subscribe link → Subscribe. Google Calendar without " +
+    "sign-in: web → Settings → Add calendar → From URL → paste the .ics link."
+  );
+}
+
+// ── Google Calendar connect / disconnect intents (PR 4) ────────────────
+
+const GOOGLE_CONNECT_PATTERNS = [
+  /\b(connect|link|sign\s*in|login|log\s*in|add)\b.{0,30}\bgoogle\b/i,
+  /\bgoogle\s*(calendar|cal)\b.{0,20}\b(connect|link|sync|sign)/i,
+  /^\s*connect\s+google(\s+calendar)?\s*$/i,
+];
+
+export function looksLikeGoogleConnect(body: string): boolean {
+  const t = body.trim();
+  if (t.length > 100) return false;
+  return GOOGLE_CONNECT_PATTERNS.some((re) => re.test(t));
+}
+
+const CAL_DISCONNECT_PATTERNS = [
+  /\b(disconnect|unlink|remove|revoke)\b.{0,25}\b(google|calendar)\b/i,
+  /\b(google|calendar)\b.{0,25}\b(disconnect|unlink|remove|revoke)\b/i,
+];
+
+export function looksLikeCalendarDisconnect(body: string): boolean {
+  const t = body.trim();
+  if (t.length > 100) return false;
+  return CAL_DISCONNECT_PATTERNS.some((re) => re.test(t));
+}
+
+export const Q_GCAL_DISCONNECT: ChoiceQuestion = {
+  id: "gcaldis",
+  choices: [
+    { value: "gcal_del", label: "Delete them", synonyms: ["delete", "remove", "yes"] },
+    { value: "gcal_keep", label: "Keep them", synonyms: ["keep", "leave", "no"] },
+  ],
+};
+
+export const GCAL_DISCONNECT_CONFIRM =
+  "I'll disconnect Google Calendar. Want me to also delete the MARP training " +
+  "sessions I put in there, or leave them?";
+
+export const GCAL_NOT_CONNECTED_REPLY =
+  "Google Calendar isn't connected right now. Say \"connect google calendar\" " +
+  "and I'll set it up.";
+
+export function buildGoogleConnectReply(athleteId: string): string {
+  if (!isGoogleConfigured()) {
+    return (
+      "Google Calendar sign-in isn't set up on this server yet. The subscribe " +
+      "link still works — say \"calendar\" and I'll send it."
+    );
+  }
+  return (
+    "Sign in with Google and I'll put every training session straight into " +
+    "your calendar — descriptions, updates and all. Link expires in 5 min:\n\n" +
+    buildGoogleMagicLinkUrl(athleteId)
   );
 }
 
@@ -117,7 +197,7 @@ export async function resetCalendarFeed(athleteId: string): Promise<string> {
     .update(athletes)
     .set({ athleticHistory: next })
     .where(eq(athletes.id, athleteId));
-  const reply = buildCalendarExportReply(athleteId, next);
+  const reply = await buildCalendarExportReply(athleteId, next);
   return (
     "Done — your old calendar links are dead.\n\n" +
     (reply ?? CAL_NOT_CONFIGURED_REPLY)

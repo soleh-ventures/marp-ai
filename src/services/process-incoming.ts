@@ -50,13 +50,21 @@ import {
   CAL_NOT_CONFIGURED_REPLY,
   CAL_OFFER,
   CAL_OFFER_SIGNATURE,
+  GCAL_DISCONNECT_CONFIRM,
+  GCAL_NOT_CONNECTED_REPLY,
   Q_CAL_OFFER,
+  Q_GCAL_DISCONNECT,
+  buildGoogleConnectReply,
+  looksLikeCalendarDisconnect,
+  looksLikeGoogleConnect,
   buildCalendarExportReply,
   looksLikeCalendarExportRequest,
   looksLikeCalendarResetRequest,
   resetCalendarFeed,
 } from "./intents/calendar-export.js";
 import { applyPrefEdit, detectPrefEdit } from "./intents/pref-edit.js";
+import { disconnectGoogle } from "./google-calendar.js";
+import { findGoogleByAthleteId } from "./google-connections.js";
 import {
   looksLikeGarminConnect,
   recordGarminInterest,
@@ -983,10 +991,35 @@ export async function processIncomingMessage(
     await resolvePendingChoice(athleteId, "caloffer");
     if (choice === "add_calendar") {
       replyText =
-        (buildCalendarExportReply(athleteId, history) ?? CAL_NOT_CONFIGURED_REPLY) +
-        REMINDER_PROMPT;
+        ((await buildCalendarExportReply(athleteId, history)) ??
+          CAL_NOT_CONFIGURED_REPLY) + REMINDER_PROMPT;
     } else {
       replyText = CAL_LATER_REPLY + REMINDER_PROMPT;
+    }
+  } else if (
+    getPendingChoice(history)?.question_id === "gcaldis" &&
+    matchFreeText(Q_GCAL_DISCONNECT, body) !== null
+  ) {
+    // Google Calendar disconnect confirmed — keep or delete MARP's events.
+    const choice = matchFreeText(Q_GCAL_DISCONNECT, body);
+    await resolvePendingChoice(athleteId, "gcaldis");
+    const res = await disconnectGoogle(athleteId, {
+      deleteEvents: choice === "gcal_del",
+    });
+    replyText =
+      choice === "gcal_del"
+        ? `Disconnected — and ${res.deleted} MARP sessions removed from your Google Calendar. Reconnect anytime with "connect google calendar".`
+        : "Disconnected. The sessions already in your calendar stay put — they just won't update anymore. Reconnect anytime.";
+  } else if (looksLikeGoogleConnect(body)) {
+    // "connect google calendar" — sign-in magic link (or honest not-set-up).
+    replyText = buildGoogleConnectReply(athleteId);
+  } else if (looksLikeCalendarDisconnect(body)) {
+    const conn = await findGoogleByAthleteId(athleteId).catch(() => null);
+    if (conn && !conn.revokedAt) {
+      replyText = GCAL_DISCONNECT_CONFIRM;
+      replyChoices = Q_GCAL_DISCONNECT;
+    } else {
+      replyText = GCAL_NOT_CONNECTED_REPLY;
     }
   } else if (looksLikeCalendarResetRequest(body)) {
     // "Reset my calendar link" — revoke every previously shared feed URL.
@@ -995,7 +1028,8 @@ export async function processIncomingMessage(
     // "Add my plan to my calendar" — deterministic capability, no LLM (the
     // June bug was the model OFFERING calendar writes it couldn't do).
     replyText =
-      buildCalendarExportReply(athleteId, history) ?? CAL_NOT_CONFIGURED_REPLY;
+      (await buildCalendarExportReply(athleteId, history)) ??
+      CAL_NOT_CONFIGURED_REPLY;
   } else if (
     getPendingChoice(history)?.question_id === "calib" &&
     matchFreeText(Q_CALIB, body) !== null
