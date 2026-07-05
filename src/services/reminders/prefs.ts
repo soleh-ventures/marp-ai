@@ -180,6 +180,19 @@ export const REMINDER_PROMPT =
 
 export const REMINDER_PROMPT_SIGNATURE = '"no thanks"';
 
+// Reminder quick-picks (E3): tap values are strings classifyPrefsReply
+// already parses, so a tap and a typed time land identically. Free-typed
+// times ("5:45am", "night before 8pm") keep working unchanged.
+export const Q_REMINDER: import("../messaging/choices.js").ChoiceQuestion = {
+  id: "remind",
+  choices: [
+    { value: "6am", label: "⏰ Morning of — 6am" },
+    { value: "7am", label: "⏰ Morning of — 7am" },
+    { value: "night before, 9pm", label: "🌙 Night before — 9pm" },
+    { value: "no thanks", label: "No reminders" },
+  ],
+};
+
 export const REMINDER_CAPTURED_REPLY = (
   time: string,
   timing: ReminderTiming = "morning_of",

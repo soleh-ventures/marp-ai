@@ -46,52 +46,28 @@ export async function getStravaConnectStatus(
   return { kind: "not_connected", linkUrl };
 }
 
+// Strava's API went behind a paid developer subscription (June 2026), so new
+// connections are OFF the menu. Existing connections (the founder's) keep
+// syncing — webhook + ingest code is untouched; only the offer died. The
+// honest reply names what works TODAY instead of a dead link.
+export const STRAVA_UNAVAILABLE_REPLY =
+  "Straight answer: Strava shut its doors on apps like me (their API went " +
+  "paid for developers), so I can't connect new Strava accounts right now.\n\n" +
+  "What works today:\n" +
+  "• Send me a GPX file after a run (export from your watch app) — I log it\n" +
+  "• Or just tell me how the run went — distance, time, how it felt\n" +
+  "• ⌚ Garmin sync is coming — reply \"garmin\" and I'll put you on the " +
+  "waitlist and ping you the day it's live.";
+
 export function buildConnectReply(status: ConnectStatus): string {
   switch (status.kind) {
     case "already_connected":
       return "Your Strava is already connected — I can see your runs automatically.";
-
+    // New connections are unavailable (paid API) — same honest reply whether
+    // they were never connected, got revoked, or the server isn't configured.
     case "revoked":
-      return (
-        "Your Strava was disconnected (either you removed MARP's access or " +
-        "the token expired). Tap the link below to reconnect — it expires in 5 minutes:\n\n" +
-        status.linkUrl
-      );
-
     case "not_connected":
-      return (
-        "Tap the link below to connect your Strava account. " +
-        "It expires in 5 minutes, so open it now:\n\n" +
-        status.linkUrl +
-        "\n\nOnce you've authorised, I'll see your runs automatically."
-      );
-
     case "not_configured":
-      return (
-        "Strava connection isn't set up yet on this server. " +
-        "If you're the developer, set TWILIO_PUBLIC_WEBHOOK_BASE."
-      );
-  }
-}
-
-// Convenience: build the Strava offer to append at onboarding completion.
-// Returns null if Strava is already connected or can't generate a link
-// (so the onboarding reply is never cluttered unnecessarily).
-export async function buildOnboardingStravaOffer(
-  athleteId: string,
-): Promise<string | null> {
-  if (!config.twilio.publicWebhookBase) return null;
-  const conn = await findByAthleteId(athleteId);
-  if (conn && !conn.revokedAt) return null;
-
-  try {
-    const linkUrl = buildMagicLinkUrl(athleteId);
-    return (
-      "\n\nOne more thing — connect your Strava and I'll see your runs automatically " +
-      "(no more manual check-ins). Link expires in 5 min:\n\n" +
-      linkUrl
-    );
-  } catch {
-    return null;
+      return STRAVA_UNAVAILABLE_REPLY;
   }
 }

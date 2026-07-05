@@ -8,6 +8,7 @@ import { twilioWebhook } from "./webhooks/twilio.js";
 import { telegramWebhook } from "./webhooks/telegram.js";
 import { stravaWebhook } from "./webhooks/strava.js";
 import { stravaAuth } from "./routes/strava-auth.js";
+import { googleAuth } from "./routes/google-auth.js";
 import { cronReminders } from "./routes/cron-reminders.js";
 import { cal } from "./routes/cal.js";
 import { startReminderScheduler } from "./services/reminders/in-process.js";
@@ -32,6 +33,8 @@ app.route("/webhooks/strava", stravaWebhook);
 // first in the matched chain.
 app.use("/auth/strava/*", rateLimit({ windowMs: 60_000, limit: 5 }));
 app.route("/auth/strava", stravaAuth);
+app.use("/auth/google/*", rateLimit({ windowMs: 60_000, limit: 5 }));
+app.route("/auth/google", googleAuth);
 
 // V8 — reminder cron. Hit by Railway scheduler every 15 min with
 // X-Cron-Secret header. Returns dispatch stats as JSON.

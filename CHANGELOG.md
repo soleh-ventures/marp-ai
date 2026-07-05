@@ -3,6 +3,26 @@
 All notable changes to marp-ai are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are semver in `package.json`.
 
+## [0.9.0] — 2026-07-05 — Tap-first onboarding, coach personas, and the plan in your calendar
+
+### Added
+- **Telegram inline keyboards** across every closed question (consent, preference taps, plan pivot, calendar offer, reminder times). Taps decode to canonical text through the SAME pipeline as typed replies (`v1:` versioned callback data); typed answers always keep working. `CHOICES_UI=text` kill switch restores numbered-text instantly.
+- **Coach preference onboarding** after intake extraction: profile mirror card (✓/fix, bounded correction loop), coaching relationship (🎯 Director / ⚖️ Partner / 🤝 Companion — persona voice flips ON the very next message), reply length (short/balanced/long — a DEFAULT, never a cap: explicit asks always override), training push (easy/balanced/hard/aggressive with an injury-warning confirm on aggressive), and "You decide, coach" with spoken defaults — never silent.
+- **Holistic intake**: other sports, work/family/sleep load, and coach topics — GDPR purpose-bound framing, skippable, reflected back in persona voice, and fed into the plan generator (cross-training scheduled around fixtures; life load shapes progression).
+- **Whole-plan calendar feed**: `GET /cal/plan/:token.ics` — webcal subscription (auto-updates on plan changes) + one-time import, RFC 5545-folded coaching descriptions (what/why/week focus), revocable via "reset my calendar link" (`cal_feed_version`). Post-plan offer with buttons; "add my plan to my calendar" intent; `calendar_connected` funnel event on first fetch.
+- **Google Calendar OAuth** (`/auth/google/start` + `/callback`, migration 0018): the athlete signs in with Google once and MARP writes every session into their primary calendar — timed events in their timezone, coaching descriptions, `marp_session_uid` extended properties as the idempotent upsert key — then **re-syncs on every plan change** (insert/patch/delete; hand-deleted events recreated). Signed 5-min HMAC `state` closes the raw-athleteId state gap the Strava flow documented. Tokens AES-256-GCM in `google_connections` (cascade-deleted with the athlete); refresh-on-expiry, `invalid_grant` → revoked. Chat: "connect google calendar" intent, Google-first calendar offer, disconnect with keep/delete-events buttons. Env: `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`.
+- **Coach calibration block** in memory context + synthesizer/plan-generator prompt rules; `eval:persona` golden-transcript eval (blind style match, length ordering, and the short-default-but-asked-for-detail override case).
+- Onboarding funnel events (`evt=onboarding_funnel step=…`), mid-flow re-entry recap (>12h) and a single 24h abandonment nudge; migration quick-calibration offer for pre-existing athletes (answer-first).
+- Per-athlete inbound serialization + `pending_choice` state (double-taps idempotent by design); Telegram outbound persists the RENDERED body so signature checks survive copy changes; `TELEGRAM_WEBHOOK_SECRET` required at boot in Telegram prod mode.
+- Committed `.env.test` so `bun test` runs green in any fresh checkout.
+
+### Changed
+- Consent accept now flows straight into intake question 1 (dead handoff message removed). Plan pivot rewritten with buttons (new signature: "Your plan. Two options").
+- Session-scope calendar links: workout time now comes from `preferred_time` only (night-before reminder time no longer becomes the workout slot — pre-existing bug fixed in the new feed path).
+
+### Removed
+- **Strava from the offering** (API paywalled June 2026): consent handoff offer, onboarding completion offer, and connect magic links are gone. "Connect strava" gets an honest reply (GPX + check-ins today, Garmin waitlist). Existing connections (webhook/ingest/refresh) untouched.
+
 ## [0.8.0] — 2026-07-05 — Garmin recovery + readiness, and a Telegram channel
 
 ### Added

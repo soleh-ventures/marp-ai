@@ -452,6 +452,32 @@ export const stravaConnections = pgTable(
   ],
 );
 
+// ─── google_connections (onboarding revamp PR 4) ─────────────────────────
+// Google Calendar OAuth per athlete. Mirrors strava_connections: tokens are
+// AES-256-GCM ciphertext (token-cipher.ts), row cascades away with the
+// athlete (GDPR erasure). Events MARP wrote live in the athlete's OWN
+// calendar — they're the athlete's data and survive deletion by design.
+export const googleConnections = pgTable("google_connections", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  athleteId: uuid("athlete_id")
+    .notNull()
+    .unique()
+    .references(() => athletes.id, { onDelete: "cascade" }),
+  // Ciphertext (base64) — never plaintext. See token-cipher.ts.
+  encryptedAccessToken: text("encrypted_access_token").notNull(),
+  encryptedRefreshToken: text("encrypted_refresh_token").notNull(),
+  tokenExpiresAt: timestamp("token_expires_at", { withTimezone: true }).notNull(),
+  scope: text("scope").notNull(),
+  connectedAt: timestamp("connected_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  lastRefreshedAt: timestamp("last_refreshed_at", { withTimezone: true }),
+  lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+  // Set on revoke (user disconnects, or Google returns invalid_grant on
+  // refresh) — the athlete must reconnect.
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+});
+
 // ─── strava_webhook_config (S3) ───────────────────────────────────────────
 //
 // Singleton row tracking the app-level Strava webhook subscription.

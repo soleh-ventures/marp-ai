@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   PIVOT_QUESTION,
   PIVOT_QUESTION_SIGNATURE,
+  Q_PIVOT,
   classifyPivotReply,
   getPivotState,
   isAwaitingPivotChoice,
@@ -13,9 +14,13 @@ describe("PIVOT_QUESTION", () => {
     expect(PIVOT_QUESTION).toContain(PIVOT_QUESTION_SIGNATURE);
   });
 
-  test("offers both paths (a and b) clearly", () => {
-    expect(PIVOT_QUESTION).toContain("(a)");
-    expect(PIVOT_QUESTION).toContain("(b)");
+  test("offers both paths (BYO and build) clearly, with tap values a/b", () => {
+    expect(PIVOT_QUESTION).toContain("You have one");
+    expect(PIVOT_QUESTION).toContain("I build you a fresh one");
+    // Buttons type the canonical letters the classifier understands.
+    expect(Q_PIVOT.choices.map((c) => c.value)).toEqual(["a", "b"]);
+    expect(classifyPivotReply("a")).toBe("byo");
+    expect(classifyPivotReply("b")).toBe("build");
   });
 
   test("starts with two newlines so it visually separates from preceding content", () => {

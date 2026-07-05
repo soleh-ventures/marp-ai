@@ -70,6 +70,63 @@ export function generateCalToken(
   return `${b64urlEncode(payloadBuf)}.${b64urlEncode(mac)}`;
 }
 
+// ─── Plan-scope feed token ───────────────────────────────────────────────
+//
+// Long-lived, athlete-scope, REVOCABLE: the payload carries a feed version
+// that the route compares against athleticHistory.cal_feed_version — "reset
+// my calendar link" bumps the version and every previously shared URL goes
+// 410. No time expiry (a subscription URL must outlive individual sessions).
+//
+// payload = "plan|{athlete_id}|{feed_version}"
+
+const PLAN_MARKER = "plan";
+
+export type PlanFeedPayload = { athleteId: string; feedVersion: number };
+
+export function generatePlanFeedToken(
+  athleteId: string,
+  feedVersion: number,
+): string {
+  const secret = loadSecret();
+  const payload = `${PLAN_MARKER}${SEP}${athleteId}${SEP}${feedVersion}`;
+  const payloadBuf = Buffer.from(payload, "utf8");
+  const mac = createHmac("sha256", secret).update(payloadBuf).digest();
+  return `${b64urlEncode(payloadBuf)}.${b64urlEncode(mac)}`;
+}
+
+export type VerifyPlanFeedResult =
+  | { ok: true; payload: PlanFeedPayload }
+  | { ok: false; reason: "malformed" | "bad_signature" };
+
+export function verifyPlanFeedToken(token: string): VerifyPlanFeedResult {
+  const parts = token.split(".");
+  if (parts.length !== 2) return { ok: false, reason: "malformed" };
+  const [payloadB64, macB64] = parts as [string, string];
+  let payloadBuf: Buffer;
+  let providedMac: Buffer;
+  try {
+    payloadBuf = b64urlDecode(payloadB64);
+    providedMac = b64urlDecode(macB64);
+  } catch {
+    return { ok: false, reason: "malformed" };
+  }
+  const secret = loadSecret();
+  const expectedMac = createHmac("sha256", secret).update(payloadBuf).digest();
+  if (
+    expectedMac.length !== providedMac.length ||
+    !timingSafeEqual(expectedMac, providedMac)
+  ) {
+    return { ok: false, reason: "bad_signature" };
+  }
+  const fields = payloadBuf.toString("utf8").split(SEP);
+  if (fields.length !== 3 || fields[0] !== PLAN_MARKER) {
+    return { ok: false, reason: "malformed" };
+  }
+  const feedVersion = Number.parseInt(fields[2]!, 10);
+  if (!Number.isFinite(feedVersion)) return { ok: false, reason: "malformed" };
+  return { ok: true, payload: { athleteId: fields[1]!, feedVersion } };
+}
+
 export type VerifyCalResult =
   | { ok: true; payload: CalTokenPayload }
   | { ok: false; reason: "malformed" | "bad_signature" | "expired" };

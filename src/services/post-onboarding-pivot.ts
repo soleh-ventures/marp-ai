@@ -25,6 +25,7 @@
 //   - "done"             → plan captured / generated, normal routing resumes
 
 import type { AthleticHistory } from "../flows/onboarding.js";
+import type { ChoiceQuestion } from "./messaging/choices.js";
 
 export type PivotState =
   | "awaiting_choice"
@@ -35,17 +36,29 @@ export type PivotState =
 // Visible signature used to detect "runner is replying to the pivot."
 // Embedded literally in the wrap-up message; matched against
 // lastOutbound. Keep short and stable — a rephrase here changes the
-// detection behaviour.
-export const PIVOT_QUESTION_SIGNATURE = "Reply (a) or (b) to start";
+// detection behaviour (eng amendment 4: signatures move in LOCKSTEP with
+// copy, and the persisted body is the RENDERED body so this check also
+// works on the WhatsApp numbered-text fallback).
+export const PIVOT_QUESTION_SIGNATURE = "Your plan. Two options";
 
 export const PIVOT_QUESTION =
-  "\n\nLast thing before we start — your training plan. Two options:\n" +
-  "(a) You already have one → paste it and I'll coach you through it\n" +
-  "(b) I build you a fresh plan, tailored to everything you just told me\n\n" +
-  "👉 " +
+  "\n\n" +
   PIVOT_QUESTION_SIGNATURE +
-  ".\nNot sure? Go with (b) — I've just got your goal, fitness, and injury " +
-  "history, so I can build a plan around you specifically, not a generic template.";
+  ":\n" +
+  "📋 You have one → I coach you through it (paste it or send a file)\n" +
+  "🛠 I build you a fresh one around everything you just told me\n\n" +
+  "Not sure? Build — you get a plan shaped around your goal, fitness, and " +
+  "that knee, not a template.";
+
+// Buttons: taps type the canonical letters the existing classifier already
+// understands ("a" = BYO, "b" = build).
+export const Q_PIVOT: ChoiceQuestion = {
+  id: "pivot",
+  choices: [
+    { value: "a", label: "📋 I have a plan", synonyms: ["have one", "byo", "mine"] },
+    { value: "b", label: "🛠 Build mine", synonyms: ["build", "build it", "fresh", "scratch"] },
+  ],
+};
 
 export const PIVOT_REPLY_BYO =
   "Great — paste your plan in chat. Week-by-week or a summary both work; " +

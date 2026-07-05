@@ -32,6 +32,14 @@ export async function saveAthletePlan(athleteId: string, plan: Plan): Promise<vo
     .update(athletes)
     .set({ athleticHistory: updated })
     .where(eq(athletes.id, athleteId));
+
+  // PR 4: every plan write re-syncs the athlete's Google Calendar (no-op
+  // when not connected). Fire-and-forget — a calendar hiccup must never
+  // fail a plan save. Dynamic import avoids the storage ↔ google-calendar
+  // module cycle (google-calendar reads plans via getStoredPlan).
+  void import("../google-calendar.js")
+    .then((m) => m.scheduleGoogleResync(athleteId))
+    .catch(() => {});
 }
 
 export function getStoredPlan(history: AthleticHistory): Plan | null {

@@ -39,6 +39,11 @@ export const config = {
       const c = process.env.MESSAGING_CHANNEL ?? "whatsapp";
       return c === "telegram" || c === "both" ? c : "whatsapp";
     })(),
+    // Kill switch for the tap UX (PR 1): "buttons" (default) renders inline
+    // keyboards on Telegram; "text" falls back to numbered options everywhere
+    // — instant rollback without a redeploy, mirroring MESSAGING_CHANNEL.
+    choicesUi: ((): "buttons" | "text" =>
+      process.env.CHOICES_UI === "text" ? "text" : "buttons")(),
   },
   telegram: {
     botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",
@@ -102,6 +107,15 @@ export const config = {
     // unit tests that don't touch Strava don't have to set it.
     tokenEncryptionKey: process.env.STRAVA_TOKEN_ENCRYPTION_KEY ?? "",
   },
+  google: {
+    // OAuth client for Google Calendar (calendar.events sensitive scope).
+    // Cloud Console setup: Web application client, redirect URI =
+    // <public base>/auth/google/callback. Publishing status "In production"
+    // (unverified is fine <100 users — one warning screen) so refresh
+    // tokens don't expire weekly like Testing mode's do.
+    clientId: process.env.GOOGLE_CLIENT_ID ?? "",
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
+  },
   magicLink: {
     // Dedicated secret — NOT reused from TWILIO_AUTH_TOKEN per eng A3.
     secret: process.env.MAGIC_LINK_SECRET ?? "",
@@ -117,6 +131,26 @@ export const config = {
     // Flip with PROACTIVE_OUTBOUND=on once the prod number is live.
     outboundEnabled: process.env.PROACTIVE_OUTBOUND === "on",
   },
+  _assertTelegramSecurity: ((): true => {
+    // Buttons turn webhook spoofing into deterministic state writes (forged
+    // callback_query can flip prefs, confirm consent, trigger the pivot), so
+    // the shared secret stops being optional once Telegram is the live
+    // channel. Hard-fail in prod; loud warning in dev (localhost isn't
+    // publicly reachable, and tests never set MESSAGING_CHANNEL).
+    const c = process.env.MESSAGING_CHANNEL ?? "whatsapp";
+    const telegramActive = c === "telegram" || c === "both";
+    const secret = process.env.TELEGRAM_WEBHOOK_SECRET ?? "";
+    if (telegramActive && !secret) {
+      const msg =
+        "TELEGRAM_WEBHOOK_SECRET must be set when MESSAGING_CHANNEL=" +
+        c +
+        " — without it anyone can POST forged updates (including button " +
+        "callbacks that mutate athlete state).";
+      if (isProd) throw new Error(msg);
+      console.error(`WARNING: ${msg}`);
+    }
+    return true;
+  })(),
   reminders: {
     // V8 deploy reality: Railway runs one always-on web service (the
     // Twilio webhook listener), so reminders dispatch in-process via a

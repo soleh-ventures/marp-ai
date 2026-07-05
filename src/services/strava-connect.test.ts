@@ -46,33 +46,26 @@ describe("looksLikeStravaConnect", () => {
 });
 
 describe("buildConnectReply", () => {
-  test("already_connected — no link in reply", () => {
+  test("already_connected — no link in reply (founder path unchanged)", () => {
     const reply = buildConnectReply({ kind: "already_connected" });
     expect(reply).toContain("already connected");
     expect(reply).not.toContain("http");
   });
 
-  test("not_connected — includes the magic link URL", () => {
-    const reply = buildConnectReply({
-      kind: "not_connected",
-      linkUrl: "https://example.ngrok.io/auth/strava/start?token=abc",
+  // Strava's API went paid for developers (June 2026): no new connections.
+  // Every non-connected state gets the same honest reply — what works today
+  // (GPX, check-ins) + the Garmin waitlist. Never a dead magic link.
+  for (const kind of ["not_connected", "revoked", "not_configured"] as const) {
+    test(`${kind} — honest unavailable reply, no dead link`, () => {
+      const reply = buildConnectReply(
+        kind === "not_configured"
+          ? { kind }
+          : { kind, linkUrl: "https://example.ngrok.io/auth/strava/start?token=abc" },
+      );
+      expect(reply).not.toContain("http");
+      expect(reply.toLowerCase()).toContain("gpx");
+      expect(reply.toLowerCase()).toContain("garmin");
+      expect(reply.toLowerCase()).toContain("waitlist");
     });
-    expect(reply).toContain("https://example.ngrok.io/auth/strava/start");
-    expect(reply).toContain("5 minute");
-  });
-
-  test("revoked — includes reconnect language + link", () => {
-    const reply = buildConnectReply({
-      kind: "revoked",
-      linkUrl: "https://example.ngrok.io/auth/strava/start?token=xyz",
-    });
-    expect(reply).toMatch(/disconnected|removed/i);
-    expect(reply).toContain("https://example.ngrok.io/auth/strava/start");
-  });
-
-  test("not_configured — no link, developer hint", () => {
-    const reply = buildConnectReply({ kind: "not_configured" });
-    expect(reply).not.toContain("http");
-    expect(reply).toContain("TWILIO_PUBLIC_WEBHOOK_BASE");
-  });
+  }
 });
