@@ -511,6 +511,40 @@ describe("formatActivityLine", () => {
     expect(line).not.toContain("km");
     expect(line).not.toContain("HR");
   });
+
+  test("compact streamNote is appended inline in brackets", () => {
+    const line = formatActivityLine({
+      discipline: "run",
+      startedAt: new Date("2026-07-05T06:30:00Z"),
+      durationS: 3600,
+      metrics: { distance_m: 10_000, avg_pace_s_per_km: 360 },
+      longRun: false,
+      streamNote: "negative split, HR drift +6%, cadence 171spm (metronomic)",
+    });
+    expect(line).toContain("[negative split, HR drift +6%, cadence 171spm (metronomic)]");
+    // Single line — the compact note never spills into a block.
+    expect(line.split("\n")).toHaveLength(1);
+  });
+
+  test("deepStreamDetail renders as an indented multi-line block", () => {
+    const line = formatActivityLine({
+      discipline: "run",
+      startedAt: new Date("2026-07-05T06:30:00Z"),
+      durationS: 3600,
+      metrics: { distance_m: 11_000, avg_pace_s_per_km: 327 },
+      longRun: true,
+      streamNote: "positive split",
+      deepStreamDetail:
+        "Distance 11.00km in 60:00, avg HR 154/max 170\nLaps: L1 1.00km 5:20 @148\nHR zones: Z2 55.6%  Z3 44.4%",
+    });
+    const rows = line.split("\n");
+    expect(rows.length).toBeGreaterThanOrEqual(4); // main + 3 detail lines
+    // Detail lines are indented under the activity line.
+    expect(rows[1]).toMatch(/^ {6}Distance 11\.00km/);
+    expect(line).toContain("HR zones: Z2 55.6%");
+    // Compact note still present on the main line.
+    expect(rows[0]).toContain("[positive split]");
+  });
 });
 
 describe("getMemoryContext — activities", () => {
