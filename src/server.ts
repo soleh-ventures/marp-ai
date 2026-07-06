@@ -10,6 +10,7 @@ import { stravaWebhook } from "./webhooks/strava.js";
 import { stravaAuth } from "./routes/strava-auth.js";
 import { googleAuth } from "./routes/google-auth.js";
 import { cronReminders } from "./routes/cron-reminders.js";
+import { internalStreams } from "./routes/internal-streams.js";
 import { cal } from "./routes/cal.js";
 import { startReminderScheduler } from "./services/reminders/in-process.js";
 import { registerTelegramWebhook } from "./services/messaging/telegram-webhook-setup.js";
@@ -39,6 +40,7 @@ app.route("/auth/google", googleAuth);
 // V8 — reminder cron. Hit by Railway scheduler every 15 min with
 // X-Cron-Secret header. Returns dispatch stats as JSON.
 app.route("/internal/cron", cronReminders);
+app.route("/internal/streams", internalStreams);
 
 // V9 — calendar ICS hosting. GET /cal/:token.ics returns the signed
 // session as RFC 5545. Public; the token is the auth.

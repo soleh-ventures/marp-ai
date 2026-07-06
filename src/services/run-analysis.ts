@@ -28,7 +28,7 @@ import { getStoredPlan } from "./plan/storage.js";
 import { sessionDate, type Plan } from "./plan/types.js";
 import { sendPostRunCheckIn } from "./check-in.js";
 import { sendPostRunReport } from "./post-run-report.js";
-import { loadStreamSummaries, renderStreamAnnotation } from "./strava-streams.js";
+import { loadStreamSummaries, renderDeepStreamDetail } from "./strava-streams.js";
 
 export type PerKm = { km: number; pace_s_per_km: number; hr: number | null };
 
@@ -177,8 +177,11 @@ export async function analyzeActivity(input: {
   // the time the post-run pipeline runs.
   const streamMap = await loadStreamSummaries([input.activityId]);
   const streamSummary = streamMap.get(input.activityId) ?? null;
+  // Deep detail (Garmin): full per-lap/zone/cadence breakdown so the coach can
+  // give a real per-segment read, not just averages. Falls back to the compact
+  // one-liner for older/Strava rows that lack the deep channels.
   const streamLine = streamSummary
-    ? `# Stream detail (AUTHORITATIVE — from full per-sample streams; prefer this over any split_pattern / hr_drift in the objective stats above if they differ)\n${renderStreamAnnotation(streamSummary)}\n\n`
+    ? `# Stream detail (AUTHORITATIVE — from the full per-sample streams; prefer this over any split_pattern / hr_drift / averages above if they differ)\n${renderDeepStreamDetail(streamSummary)}\n\n`
     : "";
 
   // Planned-session context (best effort).

@@ -257,3 +257,101 @@ def fetch_activities(g: Garmin, limit: int = 30) -> list[dict]:
             },
         })
     return out
+
+
+# ── Per-activity streams (deep analysis) ─────────────────────────────────
+# Fetch Garmin's per-second detail + laps + HR-zones for ONE activity, and
+# normalize into the shape the TS /internal/streams/summarize endpoint expects
+# (option B: the TS pure summarizer stays the single source of truth). Returns
+# None when the activity has no usable detail (strength, sparse, error).
+
+# Garmin metricDescriptor keys → our channel names.
+_STREAM_METRIC = {
+    "directTimestamp": "time",
+    "sumDistance": "distance",
+    "directHeartRate": "heartrate",
+    "directSpeed": "velocity_smooth",
+    "directElevation": "altitude",
+    "directRunCadence": "cadence",
+    "directBikeCadence": "cadence",
+    "directDoubleCadence": "cadence",
+}
+
+
+def fetch_activity_streams(g: Garmin, activity_id: str) -> dict | None:
+    """Return {streams:{key:{data:[...]}}, laps:[...], hr_zone_seconds:[...]}
+    or None. Best-effort; any sub-fetch failing degrades that piece to empty."""
+    def safe(label, fn):
+        try:
+            return _retry(fn, what=f"{label} {activity_id}", attempts=3)
+        except Exception as e:  # noqa: BLE001
+            print(f"[streams] {label} {activity_id} failed: {type(e).__name__}: {str(e)[:70]}")
+            return None
+
+    details = safe("details", lambda: g.get_activity_details(activity_id))
+    if not isinstance(details, dict):
+        return None
+    descriptors = details.get("metricDescriptors") or []
+    idx_by_key: dict[str, int] = {}
+    for d in descriptors:
+        key = d.get("key")
+        i = d.get("metricsIndex")
+        if key in _STREAM_METRIC and isinstance(i, int):
+            idx_by_key[_STREAM_METRIC[key]] = i
+    rows = details.get("activityDetailMetrics") or []
+    if "time" not in idx_by_key or "distance" not in idx_by_key or not rows:
+        return None
+
+    channels: dict[str, list] = {k: [] for k in idx_by_key}
+    t0 = None
+    for r in rows:
+        m = r.get("metrics") or []
+        for ch, i in idx_by_key.items():
+            v = m[i] if i < len(m) else None
+            if ch == "time":
+                # directTimestamp is epoch ms → seconds-from-start.
+                if v is None:
+                    channels[ch].append(None)
+                    continue
+                if t0 is None:
+                    t0 = v
+                channels[ch].append((v - t0) / 1000.0)
+            elif ch == "velocity_smooth":
+                channels[ch].append(v)  # m/s (unused by summarizer but harmless)
+            else:
+                channels[ch].append(v)
+    streams = {k: {"data": [x for x in v]} for k, v in channels.items()}
+
+    # Laps (typed splits) → normalized.
+    laps: list[dict] = []
+    splits = safe("splits", lambda: g.get_activity_typed_splits(activity_id)) \
+        or safe("splits2", lambda: g.get_activity_splits(activity_id))
+    lap_list = []
+    if isinstance(splits, dict):
+        lap_list = splits.get("lapDTOs") or splits.get("splits") or []
+    elif isinstance(splits, list):
+        lap_list = splits
+    for i, lp in enumerate(lap_list or []):
+        dist = _num(lp.get("distance"))
+        dur = _num(lp.get("duration") or lp.get("elapsedDuration"))
+        hr = _num(lp.get("averageHR"))
+        pace = round(dur / (dist / 1000)) if dist and dur and dist > 0 else None
+        laps.append({
+            "index": i + 1,
+            "distance_m": round(dist) if dist else 0,
+            "time_s": round(dur) if dur else 0,
+            "avg_hr": round(hr) if hr else None,
+            "avg_pace_s_per_km": pace,
+        })
+
+    # HR zones → seconds per zone.
+    hr_zone_seconds: list[dict] = []
+    zones = safe("hrzones", lambda: g.get_activity_hr_in_timezones(activity_id))
+    if isinstance(zones, list):
+        for z in zones:
+            zn = z.get("zoneNumber")
+            secs = _num(z.get("secsInZone"))
+            if isinstance(zn, int) and secs is not None:
+                hr_zone_seconds.append({"zone": zn, "seconds": round(secs)})
+
+    return {"streams": streams, "laps": laps, "hr_zone_seconds": hr_zone_seconds}
