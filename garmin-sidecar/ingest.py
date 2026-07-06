@@ -153,6 +153,61 @@ def ingest_activities(conn, g, athlete_id: str) -> None:
     print(f"[activities] pulled {len(acts)}, {new} new")
 
 
+# Deep streams: fetch per-second detail for recent Garmin activities that don't
+# yet have an activity_streams summary, and POST to the TS summarizer (option B:
+# the pure summarizeStreams stays the single source of truth). Bounded per run
+# so Garmin's rate limiter (harsher on datacenter IPs) never wedges the ingest.
+STREAM_BACKFILL_LIMIT = 8
+
+
+def ingest_streams(conn, g, athlete_id: str) -> None:
+    """For recent Garmin runs missing a stream summary, fetch detail+laps+zones
+    and POST to /internal/streams/summarize. Best-effort, rate-limit bounded."""
+    import requests  # local import — only this path needs it
+
+    base = (os.getenv("MARP_APP_BASE") or "").rstrip("/")
+    secret = os.getenv("CRON_SECRET")
+    if not base or not secret:
+        print("[streams] MARP_APP_BASE / CRON_SECRET unset — skipping stream ingest")
+        return
+
+    rows = conn.execute(
+        "SELECT a.source_id FROM activities a "
+        "LEFT JOIN activity_streams s ON s.activity_id = a.id "
+        "WHERE a.athlete_id=%s AND a.source='garmin' AND a.discipline='run' "
+        "  AND s.id IS NULL AND a.source_id IS NOT NULL "
+        "ORDER BY a.started_at DESC LIMIT %s",
+        (athlete_id, STREAM_BACKFILL_LIMIT),
+    ).fetchall()
+    if not rows:
+        print("[streams] none pending")
+        return
+
+    done = 0
+    for r in rows:
+        sid = r["source_id"]
+        payload = gc.fetch_activity_streams(g, sid)
+        if not payload:
+            print(f"[streams] {sid}: no usable detail")
+            time.sleep(1.5)
+            continue
+        try:
+            resp = requests.post(
+                f"{base}/internal/streams/summarize",
+                json={"source": "garmin", "source_id": str(sid), **payload},
+                headers={"X-Cron-Secret": secret},
+                timeout=30,
+            )
+            ok = resp.status_code == 200 and resp.json().get("stored")
+            print(f"[streams] {sid}: {'stored' if ok else f'HTTP {resp.status_code}'}")
+            if ok:
+                done += 1
+        except Exception as e:  # noqa: BLE001
+            print(f"[streams] {sid}: POST failed {type(e).__name__}: {str(e)[:60]}")
+        time.sleep(1.5)  # gentle with Garmin's detail endpoint
+    print(f"[streams] summarized {done}/{len(rows)}")
+
+
 def main() -> None:
     db = os.getenv("DATABASE_URL")
     if not db:
@@ -172,12 +227,16 @@ def main() -> None:
                   f"sleep_h={round((row.get('sleep_total_s') or 0)/3600,1)} "
                   f"-> readiness={r['score']} ({r['band']})")
             time.sleep(1.2)  # be gentle with Garmin's rate limiter
-        # Activities: independent of the wellness day loop and best-effort —
-        # a failure here must not lose the recovery data we just wrote.
+        # Activities + deep streams: independent of the wellness loop and
+        # best-effort — a failure here must never lose the recovery data.
         try:
             ingest_activities(conn, g, athlete_id)
         except Exception as e:  # noqa: BLE001
             print(f"[activities] block failed: {type(e).__name__}: {str(e)[:80]}")
+        try:
+            ingest_streams(conn, g, athlete_id)
+        except Exception as e:  # noqa: BLE001
+            print(f"[streams] block failed: {type(e).__name__}: {str(e)[:80]}")
     print("[ingest] done")
 
 
