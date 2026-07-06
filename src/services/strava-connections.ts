@@ -71,6 +71,20 @@ export async function findByAthleteId(
   return rows[0] ?? null;
 }
 
+// Re-read a single connection by its primary key. Used by the token
+// refresh path to pick up a rotation another caller/instance just wrote,
+// so a snapshot that lost a refresh race doesn't reuse a dead token.
+export async function findByConnectionId(
+  connectionId: string,
+): Promise<StravaConnection | null> {
+  const rows = await db
+    .select()
+    .from(stravaConnections)
+    .where(eq(stravaConnections.id, connectionId))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
 export async function markRevoked(connectionId: string): Promise<void> {
   await db
     .update(stravaConnections)
