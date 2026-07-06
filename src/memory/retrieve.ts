@@ -19,6 +19,7 @@ import {
 } from "../services/plan/adherence.js";
 import {
   loadStreamSummaries,
+  renderDeepStreamDetail,
   renderStreamAnnotation,
 } from "../services/strava-streams.js";
 import { nowInZone, type ZonedNow } from "../services/reminders/timezone.js";
@@ -193,11 +194,22 @@ export async function getMemoryContext(
   // KER-80 (Phase 3): attach the Strava streams annotation (split pattern,
   // HR drift, km range) to each activity that has one, so the coaching LLM
   // can cite the real shape of the run, not just the average.
+  // Garmin activities land via the cron (no post-run webhook), so the deep
+  // per-lap/zone/cadence read never runs through the analysis pipeline — the
+  // interactive coach is the ONLY place it can surface. Give the single most
+  // recent run its full detail (that's what "analyze my run" usually means),
+  // and the compact one-liner to the rest so the token cost stays bounded.
   const streamMap = await loadStreamSummaries(activityRowsRaw.map((r) => r.id));
+  let deepDetailUsed = false;
   const activityRows: ActivityRow[] = activityRowsRaw.map((r) => {
     const s = streamMap.get(r.id);
-    const note = s ? renderStreamAnnotation(s) : "";
-    return { ...r, streamNote: note || null };
+    if (!s) return { ...r, streamNote: null };
+    const note = renderStreamAnnotation(s) || null;
+    if (!deepDetailUsed) {
+      deepDetailUsed = true;
+      return { ...r, streamNote: note, deepStreamDetail: renderDeepStreamDetail(s) || null };
+    }
+    return { ...r, streamNote: note };
   });
 
   // F8 follow-up: anchor every conversational reply to the runner's real
@@ -248,6 +260,10 @@ export type ActivityRow = {
   // KER-80: pre-rendered streams annotation (split pattern / HR drift / km
   // range), or null when no streams summary exists for this activity.
   streamNote?: string | null;
+  // Full per-lap/zone/cadence read, attached to the most recent run only so
+  // "analyze my last run" gets the whole picture without blowing the token
+  // budget across every activity. Multi-line; rendered as an indented block.
+  deepStreamDetail?: string | null;
 };
 
 type FormatInput = {
@@ -342,6 +358,17 @@ export function formatActivityLine(a: ActivityRow): string {
   const rawDesc = typeof m.description === "string" ? m.description : "";
   const desc = rawDesc.replace(/[\x00-\x1f]+/g, " ").replace(/["`]/g, "").replace(/\s+/g, " ").trim();
   if (desc) base += ` — runner note (their words): ${desc.length > 140 ? `${desc.slice(0, 140)}…` : desc}`;
+  // Deep read (most recent run only): the full per-lap/zone/cadence breakdown
+  // as an indented block, so "analyze my last run" gets a real segment-level
+  // read instead of the one-line shape.
+  if (a.deepStreamDetail) {
+    base +=
+      "\n" +
+      a.deepStreamDetail
+        .split("\n")
+        .map((l) => `      ${l}`)
+        .join("\n");
+  }
   return base;
 }
 
