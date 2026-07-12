@@ -14,6 +14,7 @@ import {
   formatActivityLine,
   formatContext,
   getMemoryContext,
+  renderTrainingHistory,
 } from "./retrieve.js";
 
 beforeEach(async () => {
@@ -547,17 +548,42 @@ describe("formatActivityLine", () => {
   });
 });
 
+describe("renderTrainingHistory (pure)", () => {
+  test("one line per month with count, km, and pace", () => {
+    const out = renderTrainingHistory([
+      { month: "2026-03", runs: 3, distanceM: 24_000, avgPaceSPerKm: 375 },
+      { month: "2026-04", runs: 12, distanceM: 110_500, avgPaceSPerKm: 330 },
+    ]);
+    expect(out).toContain("Training history (monthly totals, all-time");
+    expect(out).toContain("2026-03: 3 runs, 24km, ~6:15");
+    expect(out).toContain("2026-04: 12 runs, 111km, ~5:30");
+    expect(out.split("\n")).toHaveLength(3); // header + 2 months
+  });
+
+  test("singular 'run', and omits pace when unknown", () => {
+    const out = renderTrainingHistory([
+      { month: "2025-09", runs: 1, distanceM: 5_000, avgPaceSPerKm: null },
+    ]);
+    expect(out).toContain("2025-09: 1 run, 5km");
+    expect(out).not.toContain("~");
+  });
+
+  test("empty history → empty string", () => {
+    expect(renderTrainingHistory([])).toBe("");
+  });
+});
+
 describe("getMemoryContext — activities", () => {
-  test("includes recent activities newest-first, capped at 14", async () => {
+  test("includes recent activities newest-first, capped at 20", async () => {
     const [a] = await db
       .insert(athletes)
       .values({ phone: "+15551110099", name: "Runner" })
       .returning();
     if (!a) throw new Error("insert failed");
 
-    // 20 runs over the last 30 days. Should cap to 14 most-recent.
+    // 26 runs over the last 26 days. Detailed block caps at 20 most-recent.
     const rows: Array<typeof activities.$inferInsert> = [];
-    for (let i = 0; i < 20; i += 1) {
+    for (let i = 0; i < 26; i += 1) {
       rows.push({
         athleteId: a.id,
         discipline: "run",
@@ -572,15 +598,51 @@ describe("getMemoryContext — activities", () => {
     await db.insert(activities).values(rows);
 
     const ctx = await getMemoryContext(a.id);
-    expect(ctx.recentActivityCount).toBe(14);
+    expect(ctx.recentActivityCount).toBe(20);
     expect(ctx.text).toContain("Recent training");
     // Newest entry (i=0 → 2026-05-27) appears before oldest in-window.
     const idxNewest = ctx.text.indexOf("2026-05-27");
-    const idxOldestInWindow = ctx.text.indexOf("2026-05-14");
+    const idxOldestInWindow = ctx.text.indexOf("2026-05-08"); // i=19
     expect(idxNewest).toBeGreaterThan(-1);
     expect(idxOldestInWindow).toBeGreaterThan(idxNewest);
-    // i=14 (2026-05-13) is outside the 14-cap.
-    expect(ctx.text).not.toContain("2026-05-13");
+    // i=20 (2026-05-07) is outside the 20-cap — no detailed line for it.
+    expect(ctx.text).not.toContain("2026-05-07");
+  });
+
+  test("training-history rollup covers months outside the detailed window", async () => {
+    const [a] = await db
+      .insert(athletes)
+      .values({ phone: "+15551110097", name: "Historian" })
+      .returning();
+    if (!a) throw new Error("insert failed");
+
+    // Runs spread across three months; the detailed window (20) can't reach
+    // the March runs, but the all-time rollup must still count them.
+    const rows: Array<typeof activities.$inferInsert> = [];
+    const seed = (month: number, day: number, i: number) =>
+      rows.push({
+        athleteId: a.id,
+        discipline: "run",
+        source: "garmin",
+        sourceId: `h${month}-${i}`,
+        startedAt: new Date(2026, month, day, 6, 30),
+        durationS: 3000,
+        metrics: { distance_m: 8_000, avg_pace_s_per_km: 375 },
+        longRun: false,
+      });
+    for (let i = 0; i < 3; i += 1) seed(2, 5 + i, i); // March (3 runs)
+    for (let i = 0; i < 12; i += 1) seed(3, 2 + i, i); // April (12 runs)
+    for (let i = 0; i < 12; i += 1) seed(4, 2 + i, i); // May (12 runs)
+    await db.insert(activities).values(rows);
+
+    const ctx = await getMemoryContext(a.id);
+    expect(ctx.text).toContain("Training history (monthly totals, all-time");
+    // March is well outside the 20 most-recent, yet its total is present.
+    expect(ctx.text).toContain("2026-03: 3 runs, 24km");
+    expect(ctx.text).toContain("2026-04: 12 runs");
+    expect(ctx.text).toContain("2026-05: 12 runs");
+    // Typical pace surfaces (6:15/km = 375s).
+    expect(ctx.text).toContain("6:15");
   });
 
   test("no Recent training section when athlete has no activities", async () => {
