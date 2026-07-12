@@ -266,4 +266,20 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # Exit 0 even on failure. On Railway a cron run that exits non-zero marks
+    # the deployment FAILED, and a FAILED active deployment DISARMS the daily
+    # schedule — so a single transient Garmin blip (expired token, 429, a bad
+    # night's data) silently halts the sync for days (observed: 6-day gap after
+    # an auth failure). Log loudly and exit clean so the schedule survives and
+    # the next scheduled run self-heals. A persistent failure shows in the logs
+    # and in garmin_wellness.ingested_at going stale, not as a dead cron.
+    try:
+        main()
+    except SystemExit as e:
+        if e.code not in (0, None):
+            print(f"[ingest] '{e.code}' — exiting 0 anyway to keep the cron schedule armed")
+        sys.exit(0)
+    except BaseException as e:  # noqa: BLE001 — nothing should disarm the schedule
+        print(f"[ingest] run failed ({type(e).__name__}: {str(e)[:120]}) — "
+              f"exiting 0 to keep the cron schedule armed; next run will retry")
+        sys.exit(0)
