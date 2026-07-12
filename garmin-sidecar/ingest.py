@@ -138,10 +138,12 @@ def upsert_activity(conn, athlete_id: str, act: dict) -> bool:
     return cur.rowcount > 0
 
 
-def ingest_activities(conn, g, athlete_id: str) -> None:
+def ingest_activities(conn, g, athlete_id: str, full: bool = False) -> None:
     """Pull recent Garmin activities into the shared activities table so the
-    coach can analyze them + plan from them (source-agnostic downstream)."""
-    acts = gc.fetch_activities(g, ACTIVITY_PULL_LIMIT)
+    coach can analyze them + plan from them (source-agnostic downstream).
+    full=True pulls the ENTIRE history (one-time backfill); otherwise the cheap
+    recent-N pull the daily cron uses (dedup makes re-pulls free)."""
+    acts = gc.fetch_all_activities(g) if full else gc.fetch_activities(g, ACTIVITY_PULL_LIMIT)
     new = 0
     for a in acts:
         try:
@@ -160,9 +162,15 @@ def ingest_activities(conn, g, athlete_id: str) -> None:
 STREAM_BACKFILL_LIMIT = 8
 
 
-def ingest_streams(conn, g, athlete_id: str) -> None:
+def ingest_streams(conn, g, athlete_id: str, limit: int | None = STREAM_BACKFILL_LIMIT,
+                   resummarize: bool = False) -> None:
     """For recent Garmin runs missing a stream summary, fetch detail+laps+zones
-    and POST to /internal/streams/summarize. Best-effort, rate-limit bounded."""
+    and POST to /internal/streams/summarize. Best-effort, rate-limit bounded.
+
+    resummarize=True + limit=None re-processes EVERY Garmin run (ignores the
+    existing-summary filter and the cap) — used by the one-time backfill so a
+    summarizer fix (e.g. the cadence normalization) lands on already-stored
+    rows too. The endpoint upserts, so re-POSTing is safe."""
     import requests  # local import — only this path needs it
 
     base = (os.getenv("MARP_APP_BASE") or "").rstrip("/")
@@ -171,13 +179,15 @@ def ingest_streams(conn, g, athlete_id: str) -> None:
         print("[streams] MARP_APP_BASE / CRON_SECRET unset — skipping stream ingest")
         return
 
+    where_missing = "" if resummarize else "AND s.id IS NULL"
+    limit_clause = "" if limit is None else f"LIMIT {int(limit)}"
     rows = conn.execute(
         "SELECT a.source_id FROM activities a "
         "LEFT JOIN activity_streams s ON s.activity_id = a.id "
         "WHERE a.athlete_id=%s AND a.source='garmin' AND a.discipline='run' "
-        "  AND s.id IS NULL AND a.source_id IS NOT NULL "
-        "ORDER BY a.started_at DESC LIMIT %s",
-        (athlete_id, STREAM_BACKFILL_LIMIT),
+        f"  AND a.source_id IS NOT NULL {where_missing} "
+        f"ORDER BY a.started_at DESC {limit_clause}",
+        (athlete_id,),
     ).fetchall()
     if not rows:
         print("[streams] none pending")
@@ -208,14 +218,29 @@ def ingest_streams(conn, g, athlete_id: str) -> None:
     print(f"[streams] summarized {done}/{len(rows)}")
 
 
+def backfill_all(conn, g, athlete_id: str) -> None:
+    """One-time: pull the ENTIRE Garmin activity history + re-summarize every
+    run's streams (also re-applies summarizer fixes like cadence normalization
+    to already-stored rows). Skips the wellness day-loop entirely."""
+    print(f"[backfill] athlete={athlete_id} — full activity + stream history")
+    ingest_activities(conn, g, athlete_id, full=True)
+    ingest_streams(conn, g, athlete_id, limit=None, resummarize=True)
+
+
 def main() -> None:
     db = os.getenv("DATABASE_URL")
     if not db:
         raise SystemExit("[ingest] DATABASE_URL not set")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    flags = {a for a in sys.argv[1:] if a.startswith("--")}
     g = gc.connect()
     with psycopg.connect(db, row_factory=dict_row, autocommit=True) as conn:
         athlete_id = resolve_athlete_id(conn)
-        dates = dates_to_pull(conn, athlete_id, sys.argv[1:])
+        if "--backfill-all" in flags:
+            backfill_all(conn, g, athlete_id)
+            print("[ingest] done")
+            return
+        dates = dates_to_pull(conn, athlete_id, args)
         print(f"[ingest] athlete={athlete_id} pulling {len(dates)} day(s): "
               f"{dates[0] if dates else '-'}..{dates[-1] if dates else '-'}")
         for date in dates:

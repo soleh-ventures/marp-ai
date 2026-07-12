@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
 import {
   activeFlags,
@@ -30,10 +30,12 @@ import { nowInZone, type ZonedNow } from "../services/reminders/timezone.js";
 // "wait, you told me yesterday…" callbacks.
 const RECENT_MESSAGE_LIMIT = 20;
 
-// How many recent activities (any source — Strava, FIT, GPX) to surface.
-// 14 covers roughly the last 1–2 weeks of consistent training; runners
-// who train less frequently get a longer time window naturally.
-const RECENT_ACTIVITY_LIMIT = 14;
+// How many recent activities (any source — Strava, FIT, GPX) to surface in
+// FULL per-run detail. 20 ≈ the last ~3-4 weeks at typical cadence. The coach
+// still "knows" the whole history via the cheap monthly rollup below (which
+// covers every activity ever), so this stays modest to bound token cost —
+// detailed where it matters (recent), aggregate for the long arc.
+const RECENT_ACTIVITY_LIMIT = 20;
 
 // T8: how many past completed-block summaries to surface. 3 covers a
 // typical year of training (one peak race per half-year, plus a tune-up)
@@ -212,6 +214,13 @@ export async function getMemoryContext(
     return { ...r, streamNote: note };
   });
 
+  // Whole-history awareness (cheap): a per-month rollup over EVERY run, so the
+  // coach can speak to the full training arc ("since September you've…") and
+  // long-term trends without dumping 100+ activity lines into every prompt.
+  // A handful of lines regardless of history length — the aggregate scales
+  // with months, not runs. Complements the detailed recent window above.
+  const trainingHistory = await loadTrainingHistory(athleteId).catch(() => []);
+
   // F8 follow-up: anchor every conversational reply to the runner's real
   // local date + weekday. Without this the coaching LLMs (domain + synth)
   // had no idea what day it was and guessed — getting "your run today" and
@@ -237,6 +246,7 @@ export async function getMemoryContext(
       pastBlocks,
       messages: recentChrono,
       activities: activityRows,
+      trainingHistory,
       stravaStatus,
       recovery,
       zonedToday,
@@ -302,6 +312,8 @@ type FormatInput = {
     receivedAt: Date;
   }>;
   activities?: Array<ActivityRow>;
+  // Whole-history monthly rollup (all-time run totals). Cheap, always present.
+  trainingHistory?: MonthlyVolume[];
   stravaStatus?: StravaStatus;
   // The runner's local "today" — date + weekday + timezone. Surfaced as
   // the first line so the LLM never derives the weekday itself.
@@ -370,6 +382,55 @@ export function formatActivityLine(a: ActivityRow): string {
         .join("\n");
   }
   return base;
+}
+
+// One month of training volume — the unit of the whole-history rollup.
+export type MonthlyVolume = {
+  month: string; // "YYYY-MM"
+  runs: number;
+  distanceM: number;
+  avgPaceSPerKm: number | null;
+};
+
+// Per-month run totals over the athlete's ENTIRE history. Cheap: one grouped
+// query, a row per month (not per run). Runs only — that's what the coach
+// plans around; other disciplines show up in the detailed recent window.
+export async function loadTrainingHistory(
+  athleteId: string,
+): Promise<MonthlyVolume[]> {
+  const rows = await db
+    .select({
+      month: sql<string>`to_char(${activities.startedAt}, 'YYYY-MM')`,
+      runs: sql<number>`count(*)::int`,
+      distanceM: sql<number>`coalesce(sum((${activities.metrics}->>'distance_m')::float), 0)`,
+      avgPaceSPerKm: sql<
+        number | null
+      >`avg(nullif((${activities.metrics}->>'avg_pace_s_per_km')::float, 0))`,
+    })
+    .from(activities)
+    .where(and(eq(activities.athleteId, athleteId), eq(activities.discipline, "run")))
+    .groupBy(sql`1`)
+    .orderBy(sql`1`);
+  return rows.map((r) => ({
+    month: r.month,
+    runs: Number(r.runs),
+    distanceM: Number(r.distanceM),
+    avgPaceSPerKm:
+      r.avgPaceSPerKm == null ? null : Math.round(Number(r.avgPaceSPerKm)),
+  }));
+}
+
+// Compact whole-history block: one line per month with run count, total km,
+// and typical pace. Bounded by months, so it stays a handful of lines even
+// after years of training. "" when there's no history (nothing to say).
+export function renderTrainingHistory(history: MonthlyVolume[]): string {
+  if (!history || history.length === 0) return "";
+  const lines = history.map((m) => {
+    const km = (m.distanceM / 1000).toFixed(0);
+    const pace = m.avgPaceSPerKm ? `, ~${formatPace(m.avgPaceSPerKm)}` : "";
+    return `  ${m.month}: ${m.runs} run${m.runs === 1 ? "" : "s"}, ${km}km${pace}`;
+  });
+  return `Training history (monthly totals, all-time — the full record; recent runs are detailed above):\n${lines.join("\n")}`;
 }
 
 // KER-78 (1b): the resolved-goal ground-truth line. Precedence (D1):
@@ -653,6 +714,13 @@ export function formatContext(input: FormatInput): string {
   if (input.activities && input.activities.length > 0) {
     const lines = input.activities.map(formatActivityLine).join("\n");
     parts.push(`Recent training (newest first):\n${lines}`);
+  }
+
+  // Whole-history rollup after the detailed recent block: the coach sees the
+  // full arc (every month back to the first logged run) without paying to
+  // reprint every activity. Fixes "I only have data back to early June".
+  if (input.trainingHistory && input.trainingHistory.length > 0) {
+    parts.push(renderTrainingHistory(input.trainingHistory));
   }
 
   if (input.messages.length > 0) {

@@ -216,6 +216,40 @@ def _gmt_to_iso(s: str | None) -> str | None:
         return None
 
 
+def _normalize_activity(a: dict) -> dict | None:
+    """Garmin summary row → MARP's shape, or None if it's missing id/start."""
+    aid = a.get("activityId")
+    started = _gmt_to_iso(a.get("startTimeGMT"))
+    if aid is None or started is None:
+        return None
+    type_key = (a.get("activityType") or {}).get("typeKey")
+    discipline = _map_discipline(type_key)
+    distance_m = _num(a.get("distance"))
+    avg_speed = _num(a.get("averageSpeed"))  # m/s
+    pace = round(1000 / avg_speed) if avg_speed and avg_speed > 0 else None
+    elev = _num(a.get("elevationGain"))
+    cal = _num(a.get("calories"))
+    return {
+        "source_id": str(aid),
+        "discipline": discipline,
+        "started_at": started,
+        "duration_s": int(_num(a.get("duration")) or 0),
+        "long_run": discipline == "run"
+        and (distance_m or 0) >= _LONG_RUN_MIN_DISTANCE_M,
+        "metrics": {
+            "name": a.get("activityName"),
+            "avg_hr": _num(a.get("averageHR")),
+            "max_hr": _num(a.get("maxHR")),
+            "calories": round(cal) if cal is not None else None,
+            "distance_m": distance_m,
+            "avg_cadence": _num(a.get("averageRunningCadenceInStepsPerMinute")),
+            "description": None,
+            "elev_gain_m": round(elev) if elev is not None else None,
+            "avg_pace_s_per_km": pace,
+        },
+    }
+
+
 def fetch_activities(g: Garmin, limit: int = 30) -> list[dict]:
     """Most recent `limit` activities, normalized to MARP's shape. Skips any
     row missing an id or start time; one bad activity never kills the batch."""
@@ -224,38 +258,32 @@ def fetch_activities(g: Garmin, limit: int = 30) -> list[dict]:
     except Exception as e:  # noqa: BLE001
         print(f"[activities] fetch failed: {type(e).__name__}: {str(e)[:80]}")
         return []
+    return [n for a in (raw or []) if (n := _normalize_activity(a))]
+
+
+def fetch_all_activities(g: Garmin, page: int = 100, cap: int = 5000) -> list[dict]:
+    """Full history: page through get_activities(start, page) until Garmin
+    returns an empty page (or we hit `cap` as a runaway guard). For the ONE-time
+    backfill — the daily cron stays on the cheap recent-N pull. Dedup on
+    (source, source_id) downstream makes overlap between pages harmless."""
     out: list[dict] = []
-    for a in raw or []:
-        aid = a.get("activityId")
-        started = _gmt_to_iso(a.get("startTimeGMT"))
-        if aid is None or started is None:
-            continue
-        type_key = (a.get("activityType") or {}).get("typeKey")
-        discipline = _map_discipline(type_key)
-        distance_m = _num(a.get("distance"))
-        avg_speed = _num(a.get("averageSpeed"))  # m/s
-        pace = round(1000 / avg_speed) if avg_speed and avg_speed > 0 else None
-        elev = _num(a.get("elevationGain"))
-        cal = _num(a.get("calories"))
-        out.append({
-            "source_id": str(aid),
-            "discipline": discipline,
-            "started_at": started,
-            "duration_s": int(_num(a.get("duration")) or 0),
-            "long_run": discipline == "run"
-            and (distance_m or 0) >= _LONG_RUN_MIN_DISTANCE_M,
-            "metrics": {
-                "name": a.get("activityName"),
-                "avg_hr": _num(a.get("averageHR")),
-                "max_hr": _num(a.get("maxHR")),
-                "calories": round(cal) if cal is not None else None,
-                "distance_m": distance_m,
-                "avg_cadence": _num(a.get("averageRunningCadenceInStepsPerMinute")),
-                "description": None,
-                "elev_gain_m": round(elev) if elev is not None else None,
-                "avg_pace_s_per_km": pace,
-            },
-        })
+    start = 0
+    while start < cap:
+        try:
+            raw = _retry(lambda s=start: g.get_activities(s, page),
+                         what=f"get_activities({start},{page})")
+        except Exception as e:  # noqa: BLE001
+            print(f"[activities] page {start} failed: {type(e).__name__}: {str(e)[:80]}")
+            break
+        batch = raw or []
+        if not batch:
+            break
+        out.extend(n for a in batch if (n := _normalize_activity(a)))
+        print(f"[activities] page start={start}: +{len(batch)} (total {len(out)})")
+        if len(batch) < page:
+            break  # last (partial) page
+        start += page
+        time.sleep(1.0)  # be gentle across pages
     return out
 
 
@@ -272,10 +300,22 @@ _STREAM_METRIC = {
     "directHeartRate": "heartrate",
     "directSpeed": "velocity_smooth",
     "directElevation": "altitude",
-    "directRunCadence": "cadence",
-    "directBikeCadence": "cadence",
-    "directDoubleCadence": "cadence",
 }
+
+# Cadence is special. Garmin exposes it under TWO descriptors on the same run:
+#   directDoubleCadence — steps/min, both feet: the conventional running
+#                         cadence (~160-180). Already the number people quote.
+#   directRunCadence    — strides/min, one foot: exactly HALF of the above.
+# They used to both map to "cadence" in a last-wins dict, and Garmin's
+# descriptor ORDER varies per activity — so a run whose descriptors ended with
+# directRunCadence stored ~80 instead of ~160 (the founder saw 79 for a run
+# that was 160). Resolve explicitly by priority, and scale run cadence ×2 so a
+# run that only exposes strides/min still lands in steps/min. Streams are
+# run-only (ingest filters discipline='run'), so doubling is always correct.
+_CADENCE_DESCRIPTORS = [
+    ("directDoubleCadence", 1),  # steps/min already
+    ("directRunCadence", 2),     # strides/min → ×2 = steps/min
+]
 
 
 def fetch_activity_streams(g: Garmin, activity_id: str) -> dict | None:
@@ -298,6 +338,16 @@ def fetch_activity_streams(g: Garmin, activity_id: str) -> dict | None:
         i = d.get("metricsIndex")
         if key in _STREAM_METRIC and isinstance(i, int):
             idx_by_key[_STREAM_METRIC[key]] = i
+    # Cadence: pick the highest-priority descriptor present + its scale factor,
+    # instead of letting descriptor order decide (the halving bug).
+    desc_idx = {d.get("key"): d.get("metricsIndex") for d in descriptors}
+    cad_scale = 1
+    for key, scale in _CADENCE_DESCRIPTORS:
+        i = desc_idx.get(key)
+        if isinstance(i, int):
+            idx_by_key["cadence"] = i
+            cad_scale = scale
+            break
     rows = details.get("activityDetailMetrics") or []
     if "time" not in idx_by_key or "distance" not in idx_by_key or not rows:
         return None
@@ -318,6 +368,9 @@ def fetch_activity_streams(g: Garmin, activity_id: str) -> dict | None:
                 channels[ch].append((v - t0) / 1000.0)
             elif ch == "velocity_smooth":
                 channels[ch].append(v)  # m/s (unused by summarizer but harmless)
+            elif ch == "cadence":
+                # Normalize strides/min → steps/min when needed (see above).
+                channels[ch].append(v * cad_scale if isinstance(v, (int, float)) else None)
             else:
                 channels[ch].append(v)
     streams = {k: {"data": [x for x in v]} for k, v in channels.items()}
