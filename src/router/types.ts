@@ -20,11 +20,31 @@ export function isDomain(s: string): s is Domain {
 // "I'm not sure I understand" handoffs in T9 onboarding.
 export type Complexity = "simple" | "coaching";
 
+// LLM-decided message intent — the router uses this instead of brittle keyword
+// regexes to decide which capability a message wants. "coaching" is the default
+// (general Q&A / chat → the expert). Integration/safety intents are emitted for
+// observability now; their regex gates migrate to this intent in later phases.
+export type MessageIntent =
+  | "coaching"
+  | "next_week_plan"
+  | "week_review"
+  | "plan_edit"
+  | "reminder"
+  | "calendar"
+  | "connect_integration"
+  | "location_change"
+  | "delete_data"
+  | "revert_adjustment"
+  | "set_style";
+
 export type Routing = {
   domains: Domain[];
   confidence: number;
   rationale: string;
   complexity: Complexity;
+  // LLM-decided intent (see MessageIntent). Defaults to "coaching". Lets the
+  // router act on what the runner MEANS instead of which keyword they hit.
+  intent: MessageIntent;
   // v1.3 (A2): the runner is asking to change their existing training plan
   // ("move my long run to Saturday", "I can't run Wednesdays", "make week 3
   // easier"). Routed to adjustPlan, not the expert router. Defaults false —

@@ -593,7 +593,7 @@ describe("getMemoryContext — activities", () => {
       rows.push({
         athleteId: a.id,
         discipline: "run",
-        source: "strava",
+        source: "garmin", // Garmin is the SSOT; the coach reads exclude the dead Strava source
         sourceId: `s${i}`,
         startedAt: new Date(2026, 4, 27 - i, 6, 30),
         durationS: 3600,

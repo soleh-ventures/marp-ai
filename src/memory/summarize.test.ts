@@ -159,7 +159,7 @@ async function seedFullyPopulatedBlock(overrides: {
   await db.insert(activities).values({
     athleteId: a.id,
     discipline: "run",
-    source: "strava",
+    source: "garmin", // Garmin is the SSOT; coach reads exclude the dead Strava source
     sourceId: "s-summarizer-1",
     startedAt: new Date("2026-03-01T06:00:00Z"),
     durationS: 5400,
