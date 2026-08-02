@@ -12,7 +12,7 @@
 // Everything here is best-effort context: getRecoveryContext returns null rather
 // than throwing so a missing sidecar / empty table never breaks a coach reply.
 
-import { and, desc, eq, gte, isNotNull } from "drizzle-orm";
+import { and, desc, eq, gte, isNotNull, ne } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { activities, garminWellness } from "../db/schema.js";
 
@@ -75,6 +75,7 @@ export async function getTrainingLoad(
       and(
         eq(activities.athleteId, athleteId),
         gte(activities.startedAt, since28),
+        ne(activities.source, "strava"), // dedup: Garmin is SSOT, don't double-count load
       ),
     );
   if (rows.length === 0) return null;

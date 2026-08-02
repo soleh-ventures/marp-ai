@@ -71,6 +71,7 @@ import {
 } from "./intents/integrations.js";
 import { classifyPivotIntent, fastPathChoice } from "./pivot-intent.js";
 import { generatePlan } from "./plan/generator.js";
+import { generateNextWeekPlan, looksLikeNextWeekPlanRequest } from "./plan/next-week.js";
 import { ingestPlan } from "./plan/ingest.js";
 import { adjustPlan } from "./plan/adjust.js";
 import { saveAthletePlan, getStoredPlan } from "./plan/storage.js";
@@ -650,6 +651,29 @@ export async function processIncomingMessage(
       );
     }
   };
+  // Adaptive next-week menu: an onboarded, mid-training runner wants the
+  // UPCOMING week shaped by recent performance — NOT a fresh 16-week plan from
+  // week 1. Generate one short week, persist it (so getStoredPlan / weekly-eval
+  // / edits keep working), roll forward each time. Own try so a generator blip
+  // never throws out of the handler.
+  const buildNextWeekForRunner = async (): Promise<string> => {
+    try {
+      const plan = await generateNextWeekPlan({ athleteId, messageId });
+      await saveAthletePlan(athleteId, plan);
+      logFunnel("plan_created", athleteId);
+      return (
+        "Here's your menu for next week — built from how you've actually been running:\n\n" +
+        renderPlanSummary(plan) +
+        renderOpenQuestions(plan)
+      );
+    } catch (err) {
+      console.error("next-week-plan failed:", (err as Error).message);
+      return (
+        "Couldn't put next week together this turn — something went sideways " +
+        "on my side. Give it another go in a moment."
+      );
+    }
+  };
   if (looksLikeDeletionRequest(body)) {
     // First-phase deletion request — reply with the confirmation prompt
     // regardless of onboarding state. The deletion-confirmation branch
@@ -775,6 +799,19 @@ export async function processIncomingMessage(
       replyText = routed.finalText.trim() + REMINDER_REASK;
       routerFrame = routed.frame;
     }
+  } else if (
+    isOnboarded(history) &&
+    getPivotState(history) === "done" &&
+    looksLikeNextWeekPlanRequest(body)
+  ) {
+    // Onboarded, mid-training runner asking for the UPCOMING week's menu.
+    // Root cause of the "it restarts a first-time plan from week 1" bug: with
+    // no stored plan, "build a plan for next week" fell into the RC1 pivot
+    // fallback → full generatePlan(). Instead, read recent (deduped Garmin)
+    // performance and produce ONE adaptive week, persisted so downstream paths
+    // work. Gated on pivot=done so the genuine first-time build is untouched.
+    fireTypingIndicator(inboundSid);
+    replyText = await buildNextWeekForRunner();
   } else if (getPivotState(history) === "awaiting_plan") {
     // Adaptive pivot: the runner chose BYO and we're waiting for the paste.
     // Read intent first so they're NEVER trapped. The old code treated every

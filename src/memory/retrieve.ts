@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, ne, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
 import {
   activeFlags,
@@ -189,7 +189,10 @@ export async function getMemoryContext(
       longRun: activities.longRun,
     })
     .from(activities)
-    .where(eq(activities.athleteId, athleteId))
+    // Exclude the dead Strava source: for the overlap period (Apr–Jun) the same
+    // run was recorded by BOTH Strava and Garmin, so counting both double-counts
+    // mileage and confuses the coach. Garmin is the source of truth now.
+    .where(and(eq(activities.athleteId, athleteId), ne(activities.source, "strava")))
     .orderBy(desc(activities.startedAt))
     .limit(RECENT_ACTIVITY_LIMIT);
 
@@ -408,7 +411,13 @@ export async function loadTrainingHistory(
       >`avg(nullif((${activities.metrics}->>'avg_pace_s_per_km')::float, 0))`,
     })
     .from(activities)
-    .where(and(eq(activities.athleteId, athleteId), eq(activities.discipline, "run")))
+    .where(
+      and(
+        eq(activities.athleteId, athleteId),
+        eq(activities.discipline, "run"),
+        ne(activities.source, "strava"), // dedup: Garmin is SSOT (see recent-activities query)
+      ),
+    )
     .groupBy(sql`1`)
     .orderBy(sql`1`);
   return rows.map((r) => ({
