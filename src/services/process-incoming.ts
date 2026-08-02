@@ -684,10 +684,11 @@ export async function processIncomingMessage(
   const routing: Routing = isOnboarded(history)
     ? await classify(body, { athleteId, messageId })
     : FALLBACK_ROUTING;
-  if (looksLikeDeletionRequest(body)) {
-    // First-phase deletion request — reply with the confirmation prompt
-    // regardless of onboarding state. The deletion-confirmation branch
-    // above will catch the follow-up.
+  if (routing.intent === "delete_data" || looksLikeDeletionRequest(body)) {
+    // First-phase deletion request — reply with the confirmation PROMPT (never
+    // the deletion itself; that needs the explicit confirm caught above), so
+    // routing this by intent as well as keyword is safe. Regardless of
+    // onboarding state.
     replyText = DELETION_CONFIRMATION_PROMPT;
   } else if (!isOnboarded(history)) {
     // Onboarding branch. The flow persists the updated athletic_history
@@ -973,7 +974,7 @@ export async function processIncomingMessage(
     // falls through to the router if it can't build an answer.
     replyText = profileReadback;
   } else if (
-    looksLikeRevertRequest(body) &&
+    (routing.intent === "revert_adjustment" || looksLikeRevertRequest(body)) &&
     (revertReply = await revertLastWeeklyAdjustment(athleteId)) !== null
   ) {
     // KER-79 (Phase 2): runner is undoing a coach-applied weekly adjustment
@@ -992,7 +993,7 @@ export async function processIncomingMessage(
     // there's no plan to evaluate (buildWeeklyEvaluation returns null).
     replyText = weeklyEval.message;
   } else if (
-    looksLikeTimezoneChange(body) &&
+    (routing.intent === "location_change" || looksLikeTimezoneChange(body)) &&
     (locChange = await extractLocationFromMessage({
       athleteId,
       messageId,
@@ -1007,7 +1008,7 @@ export async function processIncomingMessage(
     // message gets swallowed.
     replyText = await applyLocationChange(athleteId, locChange);
   } else if (
-    looksLikeReminderRequest(body) &&
+    (routing.intent === "reminder" || looksLikeReminderRequest(body)) &&
     (reminderReq = classifyPrefsReply(body)).kind !== "ambiguous"
   ) {
     // RC3 (v1.3): runner is setting/changing a reminder in normal chat
@@ -1103,11 +1104,13 @@ export async function processIncomingMessage(
     } else {
       replyText = "No problem — say \"set my style\" anytime.";
     }
-  } else if (detectPrefEdit(body) !== null) {
+  } else if (routing.intent === "set_style" || detectPrefEdit(body) !== null) {
     // "be more brief" / "harder on me" / "/settings" — preferences are living
-    // state. Enum-constrained writes only (never LLM-extracted free text).
-    const edit = detectPrefEdit(body)!;
-    if (edit.kind === "open_settings") {
+    // state. Enum-constrained writes only (never LLM-extracted free text). If
+    // the LLM flagged a style intent but we can't map the message to a concrete
+    // enum edit, OPEN the style settings rather than guess a value.
+    const edit = detectPrefEdit(body);
+    if (edit === null || edit.kind === "open_settings") {
       await db
         .update(athletes)
         .set({ athleticHistory: { ...history, prefs_state: "coach" } })
