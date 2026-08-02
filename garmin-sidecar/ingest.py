@@ -227,14 +227,42 @@ def backfill_all(conn, g, athlete_id: str) -> None:
     ingest_streams(conn, g, athlete_id, limit=None, resummarize=True)
 
 
+def heartbeat(conn, stage: str, detail: str = "") -> None:
+    """Write a run marker so we can SEE whether the cron fires and how far it
+    gets — independent of Garmin. 'start' lands before any Garmin call, so if
+    it's present the cron fired; if 'garmin_ok' is absent, Garmin auth is the
+    wall (→ the datacenter IP is blocked). Cheap, self-creating table."""
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS sync_heartbeat ("
+            "id serial PRIMARY KEY, source text DEFAULT 'garmin-cron', "
+            "stage text, detail text, at timestamptz DEFAULT now())"
+        )
+        conn.execute(
+            "INSERT INTO sync_heartbeat (stage, detail) VALUES (%s, %s)",
+            (stage, detail[:200]),
+        )
+    except Exception as e:  # noqa: BLE001 — heartbeat must never break the run
+        print(f"[heartbeat] {stage} write failed: {type(e).__name__}: {str(e)[:60]}")
+
+
 def main() -> None:
     db = os.getenv("DATABASE_URL")
     if not db:
         raise SystemExit("[ingest] DATABASE_URL not set")
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     flags = {a for a in sys.argv[1:] if a.startswith("--")}
-    g = gc.connect()
+    # Connect the DB FIRST and write a heartbeat before touching Garmin, so a
+    # Garmin auth failure still leaves proof the cron fired.
     with psycopg.connect(db, row_factory=dict_row, autocommit=True) as conn:
+        heartbeat(conn, "start")
+        try:
+            g = gc.connect()
+        except BaseException as e:  # noqa: BLE001
+            heartbeat(conn, "garmin_fail", f"{type(e).__name__}: {e}")
+            print(f"[ingest] Garmin auth failed: {type(e).__name__}: {str(e)[:120]}")
+            return
+        heartbeat(conn, "garmin_ok")
         athlete_id = resolve_athlete_id(conn)
         if "--backfill-all" in flags:
             backfill_all(conn, g, athlete_id)
@@ -262,6 +290,7 @@ def main() -> None:
             ingest_streams(conn, g, athlete_id)
         except Exception as e:  # noqa: BLE001
             print(f"[streams] block failed: {type(e).__name__}: {str(e)[:80]}")
+        heartbeat(conn, "done")
     print("[ingest] done")
 
 
