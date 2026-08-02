@@ -146,6 +146,12 @@ export function getPlanIngestPrompt(): string {
   return loadFile("plan-ingest.md").body;
 }
 
+// Adaptive weekly menu: reads recent performance → ONE upcoming week. Distinct
+// from the full periodised generator (which starts a fresh multi-week block).
+export function getNextWeekPlanPrompt(): string {
+  return loadFile("next-week-plan.md").body;
+}
+
 // v1.3 (A1): targeted-mutation prompt for editing an existing plan.
 export function getPlanAdjustPrompt(): string {
   return loadFile("plan-adjust.md").body;

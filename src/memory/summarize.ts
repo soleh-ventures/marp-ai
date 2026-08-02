@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, isNull, lte, or } from "drizzle-orm";
+import { and, asc, eq, gte, isNull, lte, ne, or } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { config } from "../config.js";
@@ -100,6 +100,7 @@ export async function summarizeBlock(
             eq(activities.athleteId, block.athleteId),
             gte(activities.startedAt, windowStart),
             lte(activities.startedAt, windowEnd),
+            ne(activities.source, "strava"), // dedup: Garmin is SSOT
           ),
         )
         .orderBy(asc(activities.startedAt)),

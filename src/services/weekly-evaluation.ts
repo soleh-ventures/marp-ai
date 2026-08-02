@@ -15,7 +15,7 @@
 //     tells them (with a one-tap revert). Health red flags set safety_hold and
 //     are proposed, never auto-applied.
 
-import { and, desc, eq, gte, isNull } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, ne } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { activities, athletes, weeklyEvaluations } from "../db/schema.js";
 import { getAthleticHistory } from "../flows/onboarding.js";
@@ -107,7 +107,13 @@ async function loadActivities(athleteId: string): Promise<WeekActivity[]> {
       metrics: activities.metrics,
     })
     .from(activities)
-    .where(and(eq(activities.athleteId, athleteId), gte(activities.startedAt, since)))
+    .where(
+      and(
+        eq(activities.athleteId, athleteId),
+        gte(activities.startedAt, since),
+        ne(activities.source, "strava"), // dedup: Garmin is SSOT, avoid double-counting the overlap
+      ),
+    )
     .orderBy(desc(activities.startedAt));
 }
 
