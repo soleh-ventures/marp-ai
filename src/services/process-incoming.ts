@@ -9,7 +9,8 @@ import {
 } from "../flows/onboarding.js";
 import { getMemoryContext } from "../memory/retrieve.js";
 import { route } from "../router/index.js";
-import { classify } from "../router/classifier.js";
+import { classify, FALLBACK_ROUTING } from "../router/classifier.js";
+import type { Routing } from "../router/types.js";
 import { triageSafety } from "./safety/triage.js";
 import { alertOperator } from "./safety/alert.js";
 import { recordSafetyEvent } from "./safety/events.js";
@@ -674,6 +675,15 @@ export async function processIncomingMessage(
       );
     }
   };
+  // LLM-decided routing (A: LLM-first router). For an onboarded runner, classify
+  // ONCE here so the capability branches below act on what the message MEANS,
+  // not which keyword it hit — the fix for "feels hardcoded / keyword-based".
+  // classify() never throws (falls back to intent "coaching" → the expert).
+  // Onboarding/pivot are state-driven and handled before the capability gates,
+  // so we skip the call for non-onboarded runners.
+  const routing: Routing = isOnboarded(history)
+    ? await classify(body, { athleteId, messageId })
+    : FALLBACK_ROUTING;
   if (looksLikeDeletionRequest(body)) {
     // First-phase deletion request — reply with the confirmation prompt
     // regardless of onboarding state. The deletion-confirmation branch
@@ -802,7 +812,7 @@ export async function processIncomingMessage(
   } else if (
     isOnboarded(history) &&
     getPivotState(history) === "done" &&
-    looksLikeNextWeekPlanRequest(body)
+    (routing.intent === "next_week_plan" || looksLikeNextWeekPlanRequest(body))
   ) {
     // Onboarded, mid-training runner asking for the UPCOMING week's menu.
     // Root cause of the "it restarts a first-time plan from week 1" bug: with
@@ -972,7 +982,7 @@ export async function processIncomingMessage(
     // regex short-circuits to null and we fall through to routing.
     replyText = revertReply;
   } else if (
-    looksLikeWeekReviewRequest(body) &&
+    (routing.intent === "week_review" || looksLikeWeekReviewRequest(body)) &&
     (weeklyEval = await buildWeeklyEvaluation(athleteId, { messageId })) !== null
   ) {
     // KER-79 (Phase 2): "how did my week go?" → the coach evaluation grounded
@@ -1123,12 +1133,10 @@ export async function processIncomingMessage(
     // can take 10-25s, so the runner needs a signal that MARP is on it.
     fireTypingIndicator(inboundSid);
     const memory = await getMemoryContext(athleteId);
-    // v1.3 (A2): classify once up front so we can intercept a plan-edit
-    // before the expensive expert pipeline. The routing is passed into
-    // route() below so we never classify twice.
-    const routing = await classify(body, { athleteId, messageId });
-
-    if (routing.planEdit && getStoredPlan(history)) {
+    // `routing` was classified once up top (A: LLM-first router) and is reused
+    // here — no second classify call. A plan-edit is intercepted before the
+    // expensive expert pipeline.
+    if ((routing.planEdit || routing.intent === "plan_edit") && getStoredPlan(history)) {
       // v1.3 (A1): runner wants to change their existing plan. Apply the
       // edit via targeted mutation (Sonnet), save, show the new version.
       const result = await adjustPlan({ athleteId, messageId, editRequest: body });

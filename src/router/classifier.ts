@@ -1,7 +1,26 @@
 import { config } from "../config.js";
 import { llmCall } from "../services/llm-call.js";
 import { getClassifierPrompt } from "./prompts.js";
-import { isDomain, type Routing } from "./types.js";
+import { isDomain, type MessageIntent, type Routing } from "./types.js";
+
+const INTENTS: readonly MessageIntent[] = [
+  "coaching",
+  "next_week_plan",
+  "week_review",
+  "plan_edit",
+  "reminder",
+  "calendar",
+  "connect_integration",
+  "location_change",
+  "delete_data",
+  "revert_adjustment",
+  "set_style",
+];
+function parseIntent(v: unknown): MessageIntent {
+  return typeof v === "string" && (INTENTS as readonly string[]).includes(v)
+    ? (v as MessageIntent)
+    : "coaching";
+}
 
 // JSON-mode classifier. We could use tool_use, but with Claude 4.x the
 // strict JSON schema in the system prompt + a parse fallback is reliable
@@ -15,11 +34,12 @@ import { isDomain, type Routing } from "./types.js";
 // reply is the least-surprising outcome for a running coach: the runner
 // still gets a real answer instead of silence. is_fork stays false so the
 // pipeline runs its normal single-domain path.
-const FALLBACK_ROUTING: Routing = {
+export const FALLBACK_ROUTING: Routing = {
   domains: ["training"],
   confidence: 0,
   rationale: "classifier fallback (unparseable response)",
   complexity: "coaching",
+  intent: "coaching", // safe default → the expert coach, never a canned capability
   planEdit: false,
   isFork: false,
   resolvesDecision: null,
@@ -40,22 +60,26 @@ export async function classify(
   // We must NEVER throw out of here — a classifier blip used to bubble all
   // the way up and leave the runner with no reply at all.
   for (let attempt = 0; attempt < 2; attempt++) {
-    const res = await llmCall(
-      {
-        model: config.llm.classifierModel,
-        system: getClassifierPrompt(),
-        user: message,
-        maxTokens: 200,
-        temperature: 0,
-        cacheSystem: true,
-      },
-      { athleteId: ctx.athleteId, messageId: ctx.messageId, component: "classifier" },
-    );
     try {
+      const res = await llmCall(
+        {
+          model: config.llm.classifierModel,
+          system: getClassifierPrompt(),
+          user: message,
+          maxTokens: 200,
+          temperature: 0,
+          cacheSystem: true,
+        },
+        { athleteId: ctx.athleteId, messageId: ctx.messageId, component: "classifier" },
+      );
       return parseRouting(res.text);
     } catch (err) {
+      // Catch the WHOLE call, not just the parse: the LLM call itself can throw
+      // (provider error, timeout). classify() must NEVER throw — the router now
+      // calls it on every message, and a blip must degrade to "coaching" (the
+      // expert), not leave the runner with no reply.
       console.error(
-        `classifier parse failed (attempt ${attempt + 1}/2):`,
+        `classifier failed (attempt ${attempt + 1}/2):`,
         (err as Error).message,
       );
     }
@@ -108,6 +132,10 @@ export function parseRouting(raw: string): Routing {
   // mutation path; anything else stays false so a coaching question is
   // never treated as an edit.
   const planEdit = obj.plan_edit === true;
+  // LLM-decided intent (defaults to "coaching" when absent/unknown — e.g. an
+  // older prompt in flight during a deploy). plan_edit stays authoritative for
+  // the edit path; if the LLM says intent=plan_edit, honour it there too.
+  const intent = parseIntent(obj.intent);
   // ET5: new fields. Default to safe values when the LLM doesn't emit
   // them (e.g. older prompts in flight during a deploy) — isFork false
   // means the rest of the pipeline runs unchanged, resolvesDecision null
@@ -127,6 +155,7 @@ export function parseRouting(raw: string): Routing {
     confidence,
     rationale,
     complexity,
+    intent,
     planEdit,
     isFork,
     resolvesDecision,

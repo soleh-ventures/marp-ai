@@ -46,6 +46,24 @@ describe("parseRouting", () => {
     expect(r.complexity).toBe("coaching");
   });
 
+  test("intent parses a known value", () => {
+    const r = parseRouting(
+      '{"domains":["training"],"confidence":0.9,"rationale":"x","intent":"next_week_plan"}',
+    );
+    expect(r.intent).toBe("next_week_plan");
+  });
+
+  test("intent defaults to coaching when absent or unknown", () => {
+    expect(parseRouting('{"domains":["training"],"confidence":0.9,"rationale":"x"}').intent).toBe(
+      "coaching",
+    );
+    expect(
+      parseRouting(
+        '{"domains":["training"],"confidence":0.9,"rationale":"x","intent":"teleport"}',
+      ).intent,
+    ).toBe("coaching");
+  });
+
   test("throws on non-JSON", () => {
     expect(() => parseRouting("I think this is about training")).toThrow();
   });
