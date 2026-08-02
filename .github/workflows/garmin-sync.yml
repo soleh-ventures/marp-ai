@@ -1,0 +1,47 @@
+name: Garmin daily sync
+
+# Pulls the runner's Garmin wellness + activities into MARP's Postgres.
+#
+# WHY GITHUB ACTIONS: Railway's cron never actually fired this workload (3 weeks,
+# zero runs — proven by a DB heartbeat that never appeared). GitHub's scheduled
+# runner is reliable AND its logs are visible, so a failure shows red here
+# instead of vanishing. Runs the same garmin-sidecar/ingest.py.
+#
+# Secrets required (repo → Settings → Secrets → Actions):
+#   GARMIN_DATABASE_URL  — the PUBLIC Postgres proxy URL (not the .railway.internal one)
+#   GARMIN_TOKEN_STRING  — serialized Garmin token (garth dumps)
+#   GARMIN_ATHLETE_ID    — the athlete UUID to sync
+#   MARP_APP_BASE        — https://marp-ai-production.up.railway.app
+#   CRON_SECRET          — matches marp-ai's CRON_SECRET (for the streams endpoint)
+
+on:
+  schedule:
+    - cron: "15 5 * * *" # 05:15 UTC daily (~07:15 Europe/Berlin)
+  workflow_dispatch: {} # manual trigger for testing / catch-up
+
+concurrency:
+  group: garmin-sync
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: garmin-sidecar
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Ingest
+        env:
+          DATABASE_URL: ${{ secrets.GARMIN_DATABASE_URL }}
+          GARMIN_TOKEN_STRING: ${{ secrets.GARMIN_TOKEN_STRING }}
+          GARMIN_ATHLETE_ID: ${{ secrets.GARMIN_ATHLETE_ID }}
+          MARP_APP_BASE: ${{ secrets.MARP_APP_BASE }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: python ingest.py

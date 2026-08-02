@@ -260,8 +260,10 @@ def main() -> None:
             g = gc.connect()
         except BaseException as e:  # noqa: BLE001
             heartbeat(conn, "garmin_fail", f"{type(e).__name__}: {e}")
-            print(f"[ingest] Garmin auth failed: {type(e).__name__}: {str(e)[:120]}")
-            return
+            # Raise (non-zero exit) so a scheduled runner shows the failure red
+            # rather than a silent green. scheduler.py's _run() catches this so
+            # its daily loop still survives.
+            raise SystemExit(f"Garmin auth failed: {type(e).__name__}: {str(e)[:120]}")
         heartbeat(conn, "garmin_ok")
         athlete_id = resolve_athlete_id(conn)
         if "--backfill-all" in flags:
@@ -295,20 +297,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    # Exit 0 even on failure. On Railway a cron run that exits non-zero marks
-    # the deployment FAILED, and a FAILED active deployment DISARMS the daily
-    # schedule — so a single transient Garmin blip (expired token, 429, a bad
-    # night's data) silently halts the sync for days (observed: 6-day gap after
-    # an auth failure). Log loudly and exit clean so the schedule survives and
-    # the next scheduled run self-heals. A persistent failure shows in the logs
-    # and in garmin_wellness.ingested_at going stale, not as a dead cron.
-    try:
-        main()
-    except SystemExit as e:
-        if e.code not in (0, None):
-            print(f"[ingest] '{e.code}' — exiting 0 anyway to keep the cron schedule armed")
-        sys.exit(0)
-    except BaseException as e:  # noqa: BLE001 — nothing should disarm the schedule
-        print(f"[ingest] run failed ({type(e).__name__}: {str(e)[:120]}) — "
-              f"exiting 0 to keep the cron schedule armed; next run will retry")
-        sys.exit(0)
+    # A direct run (GitHub Actions daily sync, or a manual invocation) should
+    # propagate failure as a non-zero exit so the run shows RED, not a silent
+    # green. The long-running scheduler.py does NOT go through here — it calls
+    # ingest.main() and catches exceptions itself, so its loop survives a bad
+    # day regardless of this exit code.
+    main()
