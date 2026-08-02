@@ -570,9 +570,11 @@ export function formatContext(input: FormatInput): string {
   // features it actually has (it was telling runners "I can't send
   // reminders"). State them plainly; never claim you can't do these.
   parts.push(
-    "MARP can: send WhatsApp reminders on training days (the runner sets a " +
+    "MARP can: send reminders on training days (the runner sets a " +
       "time, or asks for the night before — just confirm and tell them it's " +
-      "set), add sessions to their calendar, and read their Strava activity. " +
+      "set), add sessions to their calendar, and read their Garmin activity " +
+      "(runs, pace, HR, per-lap detail, recovery). The runner's only connected " +
+      "data source is their Garmin watch. " +
       "If the runner asks to be reminded, treat it as a real feature — never " +
       "say you can't send reminders or scheduled messages.",
   );
@@ -657,20 +659,16 @@ export function formatContext(input: FormatInput): string {
   // this week prescribes.
   if (input.recovery) parts.push(input.recovery);
 
-  if (input.stravaStatus) {
+  // Wearable status (Garmin is the only data source). If the runner mentions a
+  // recent run that isn't in the list above, their watch just hasn't synced yet
+  // — say that, and frame connectivity around Garmin only.
+  {
     const hasActivities = (input.activities?.length ?? 0) > 0;
-    let line: string;
-    if (input.stravaStatus === "connected") {
-      line = hasActivities
-        ? "Strava: connected"
-        : "Strava: connected (no activities recorded yet — only new/edited runs sync going forward)";
-    } else if (input.stravaStatus === "revoked") {
-      line =
-        "Strava: previously connected but access was revoked — the runner needs to reconnect";
-    } else {
-      line = "Strava: not connected";
-    }
-    parts.push(line);
+    parts.push(
+      hasActivities
+        ? "Wearable: Garmin connected. If the runner mentions a run that isn't in the recent-training list, their watch hasn't synced it yet — tell them it can take a little while and you'll see it once it lands."
+        : "Wearable: Garmin — no activities have synced yet. If the runner asks about a specific run, tell them their Garmin data hasn't come through yet (it can lag), not that they're 'not connected'.",
+    );
   }
 
   if (input.block) {
