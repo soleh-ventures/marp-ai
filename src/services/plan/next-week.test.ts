@@ -80,7 +80,7 @@ describe("generateNextWeekPlan (DB + mock LLM)", () => {
     if (!a) throw new Error("athlete insert failed");
     mockProvider.setResponses([{ match: "upcoming week", text: TWO_WEEK_JSON }]);
 
-    const plan = await generateNextWeekPlan({ athleteId: a.id, messageId: null });
+    const plan = await generateNextWeekPlan({ athleteId: a.id, messageId: null, requestText: "keep it easy" });
     // Capped to a single week even though the model returned two.
     expect(plan.weeks).toHaveLength(1);
     expect(plan.weeks[0]?.sessions.length).toBeGreaterThanOrEqual(2);
@@ -88,5 +88,25 @@ describe("generateNextWeekPlan (DB + mock LLM)", () => {
     expect(plan.start_date).not.toBe("2020-01-01");
     expect(plan.start_date >= "2026-01-01").toBe(true);
     expect(new Date(plan.start_date).getUTCDay()).toBe(1); // Monday
+  });
+
+  test("the runner's request text is sent to the LLM (drives the plan)", async () => {
+    const [a] = await db
+      .insert(athletes)
+      .values({ phone: "+15551117002", name: "Runner", timezone: "Europe/Berlin" })
+      .returning();
+    if (!a) throw new Error("athlete insert failed");
+    mockProvider.setResponses([{ match: "Task", text: TWO_WEEK_JSON }]);
+    await generateNextWeekPlan({
+      athleteId: a.id,
+      messageId: null,
+      requestText: "please add a hill session and keep the volume the same",
+    });
+    // The runner's words must be in the prompt the LLM sees — otherwise every
+    // request yields the same plan (the reported bug). mockProvider.calls
+    // records the exact request sent.
+    const sent = mockProvider.calls.map((c) => c.user).join("\n");
+    expect(sent).toContain("add a hill session");
+    expect(sent).toMatch(/what the runner asked for/i);
   });
 });
