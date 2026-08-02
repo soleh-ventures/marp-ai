@@ -227,14 +227,44 @@ def backfill_all(conn, g, athlete_id: str) -> None:
     ingest_streams(conn, g, athlete_id, limit=None, resummarize=True)
 
 
+def heartbeat(conn, stage: str, detail: str = "") -> None:
+    """Write a run marker so we can SEE whether the cron fires and how far it
+    gets — independent of Garmin. 'start' lands before any Garmin call, so if
+    it's present the cron fired; if 'garmin_ok' is absent, Garmin auth is the
+    wall (→ the datacenter IP is blocked). Cheap, self-creating table."""
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS sync_heartbeat ("
+            "id serial PRIMARY KEY, source text DEFAULT 'garmin-cron', "
+            "stage text, detail text, at timestamptz DEFAULT now())"
+        )
+        conn.execute(
+            "INSERT INTO sync_heartbeat (stage, detail) VALUES (%s, %s)",
+            (stage, detail[:200]),
+        )
+    except Exception as e:  # noqa: BLE001 — heartbeat must never break the run
+        print(f"[heartbeat] {stage} write failed: {type(e).__name__}: {str(e)[:60]}")
+
+
 def main() -> None:
     db = os.getenv("DATABASE_URL")
     if not db:
         raise SystemExit("[ingest] DATABASE_URL not set")
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     flags = {a for a in sys.argv[1:] if a.startswith("--")}
-    g = gc.connect()
+    # Connect the DB FIRST and write a heartbeat before touching Garmin, so a
+    # Garmin auth failure still leaves proof the cron fired.
     with psycopg.connect(db, row_factory=dict_row, autocommit=True) as conn:
+        heartbeat(conn, "start")
+        try:
+            g = gc.connect()
+        except BaseException as e:  # noqa: BLE001
+            heartbeat(conn, "garmin_fail", f"{type(e).__name__}: {e}")
+            # Raise (non-zero exit) so a scheduled runner shows the failure red
+            # rather than a silent green. scheduler.py's _run() catches this so
+            # its daily loop still survives.
+            raise SystemExit(f"Garmin auth failed: {type(e).__name__}: {str(e)[:120]}")
+        heartbeat(conn, "garmin_ok")
         athlete_id = resolve_athlete_id(conn)
         if "--backfill-all" in flags:
             backfill_all(conn, g, athlete_id)
@@ -262,24 +292,14 @@ def main() -> None:
             ingest_streams(conn, g, athlete_id)
         except Exception as e:  # noqa: BLE001
             print(f"[streams] block failed: {type(e).__name__}: {str(e)[:80]}")
+        heartbeat(conn, "done")
     print("[ingest] done")
 
 
 if __name__ == "__main__":
-    # Exit 0 even on failure. On Railway a cron run that exits non-zero marks
-    # the deployment FAILED, and a FAILED active deployment DISARMS the daily
-    # schedule — so a single transient Garmin blip (expired token, 429, a bad
-    # night's data) silently halts the sync for days (observed: 6-day gap after
-    # an auth failure). Log loudly and exit clean so the schedule survives and
-    # the next scheduled run self-heals. A persistent failure shows in the logs
-    # and in garmin_wellness.ingested_at going stale, not as a dead cron.
-    try:
-        main()
-    except SystemExit as e:
-        if e.code not in (0, None):
-            print(f"[ingest] '{e.code}' — exiting 0 anyway to keep the cron schedule armed")
-        sys.exit(0)
-    except BaseException as e:  # noqa: BLE001 — nothing should disarm the schedule
-        print(f"[ingest] run failed ({type(e).__name__}: {str(e)[:120]}) — "
-              f"exiting 0 to keep the cron schedule armed; next run will retry")
-        sys.exit(0)
+    # A direct run (GitHub Actions daily sync, or a manual invocation) should
+    # propagate failure as a non-zero exit so the run shows RED, not a silent
+    # green. The long-running scheduler.py does NOT go through here — it calls
+    # ingest.main() and catches exceptions itself, so its loop survives a bad
+    # day regardless of this exit code.
+    main()

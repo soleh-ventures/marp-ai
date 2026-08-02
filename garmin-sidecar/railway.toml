@@ -1,13 +1,16 @@
-# Railway config for the Garmin recovery cron service.
+# Railway config for the Garmin sidecar.
 # Deploy as a SEPARATE Railway service with Root Directory = garmin-sidecar.
-# It builds the Python sidecar and runs the daily ingest, then exits.
+#
+# NOT a cron service. Railway's cronSchedule never fired this service reliably
+# (a run-once container shows FAILED and the schedule never executed — proven by
+# a heartbeat that never appeared over 3 weeks). Instead we run scheduler.py: a
+# long-running process that ingests on startup and then once daily at 05:15 UTC,
+# forever. It never exits, so Railway keeps it RUNNING; ON_FAILURE restarts it if
+# it ever crashes.
 [build]
 builder = "NIXPACKS"
 
 [deploy]
-startCommand = "python ingest.py"
-# Daily at 05:15 UTC (~07:15 Europe/Berlin) — after wake, last night's sleep
-# finalized. The ingester backfills missed days, so an occasional skip is fine.
-cronSchedule = "15 5 * * *"
-# Cron jobs run once and exit; do not restart on exit-0.
-restartPolicyType = "NEVER"
+startCommand = "python scheduler.py"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10

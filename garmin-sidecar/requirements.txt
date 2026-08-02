@@ -2,4 +2,5 @@
 garminconnect>=0.2.25   # unofficial Garmin Connect client (uses your own login)
 python-dotenv>=1.0.1    # load .env for GARMIN_* and DATABASE_URL
 psycopg[binary]>=3.2.0  # write garmin_wellness into MARP's Postgres
+requests>=2.31          # POST normalized streams to the app's internal summarizer
 pytest>=8.0             # test suite (readiness unit + DB contract/merge)
