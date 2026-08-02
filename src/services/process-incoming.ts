@@ -658,7 +658,7 @@ export async function processIncomingMessage(
   // never throws out of the handler.
   const buildNextWeekForRunner = async (): Promise<string> => {
     try {
-      const plan = await generateNextWeekPlan({ athleteId, messageId });
+      const plan = await generateNextWeekPlan({ athleteId, messageId, requestText: body });
       await saveAthletePlan(athleteId, plan);
       logFunnel("plan_created", athleteId);
       return (
